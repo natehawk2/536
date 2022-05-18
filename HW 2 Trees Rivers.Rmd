@@ -1,0 +1,451 @@
+---
+title: "HW 2 Trees"
+author: "Nathan Hawkins"
+date: "9/29/2021"
+output: html_document
+---
+
+```{r}
+rivers <- read.csv("Rivers.csv")
+head(rivers)
+
+```
+
+
+# EDA
+
+```{r}
+hist(rivers$Metric)
+ggplot(data = rivers, mapping = aes(x = bio15, y = Metric)) + 
+  geom_point()
+
+ggplot(data = rivers, mapping = aes(x = cls8, y = Metric)) + 
+  geom_point()
+
+ggplot(data = rivers, mapping = aes(x = CumPrec01, y = Metric)) + 
+  geom_point() + 
+  labs(title = "Scatterplot of January Precipitation and Waterflow", y = "Waterflow", x = "January Precipitation") +
+  theme_clean()
+
+ggplot(data = rivers, mapping = aes(x = MeanPopden_2010, y = Metric)) + 
+  geom_point() + 
+  labs(title = "Scatterplot of January Precipitation and Waterflow", y = "Waterflow") +
+  theme_minimal()
+
+
+ggplot(data = rivers, mapping = aes(x = Metric)) + 
+  geom_histogram(bins = 10) + 
+  labs(title = "Histogram of  Waterflow", x = "Waterflow") +
+  theme_minimal()
+
+library(ggmap)
+rivers$Lon
+qmplot(Lon, Lat, data = rivers, colour = I('blue'), size = I(2), darken = 0)
+
+
+HoustonMap <- qmap("Utah", zoom = 14, color = "bw", legend = "topleft")
+HoustonMap +
+geom_point(aes(x = lon, y = lat, colour = offense, size = offense),
+data = violent_crimes)
+
+
+
+```
+
+```{r fig.width=8}
+bb <- make_bbox(lon=Lon, lat=Lat, data=rivers)
+mymap <- get_map(location=bb, zoom=4, maptype="toner")
+ggmap(mymap)+geom_point(data=rivers, mapping = aes(x=Lon, y=Lat, color = Metric),  alpha=0.8, size = 4) + 
+  labs(title = "Locations and Waterflow of \nRocky Mountain rivers") + theme(legend.position = "none")
+
+
+#+ scale_fill_distiller(palette="Spectral", na.value=NA) + coord_cartesian()
+```
+
+$\bm{r}$
+
+```{r}
+set.seed(2345)
+ samp <- sample(1:102, 90)
+train <- rivers[samp,]
+test <- rivers[-samp,]
+library(rpart)
+library(rpart.plot)
+tree <- rpart(Metric~.,data=rivers,  control=list(cp=0))
+rpart.plot(tree)
+plotcp(tree)
+min.cp <- tree$cptable[which.min(tree$cptable[,'xerror']),'CP']
+tree.pruned <- prune(tree, cp=min.cp)
+rpart.plot(tree.pruned)
+yhat.tree = predict(tree.pruned, newdata=)
+summary(tree)
+```
+
+
+
+```{r}
+### Bagging
+library(ranger)
+library(gbm)
+library(Rcpp)
+library(magrittr)
+
+num_trees <- seq(1,500, length.out = 100)
+bag.pred.error <- c()
+bag.r.sqr <- c()
+for(i in 1:100){
+  bag <- ranger(Metric~.,data=rivers,num.trees = num_trees[i], mtry = ncol(rivers) - 1, importance = "none") 
+  bag.pred.error[i] <- bag$prediction.error
+  bag.r.sqr[i] <- bag$r.squared
+}
+
+plot(num_trees, bag.pred.error)
+
+library(ggplot2)
+ggplot(mapping = aes(x = num_trees, y = bag.pred.error)) + 
+  geom_line(color ="blue", size = 2) + 
+  geom_line(mapping = aes(x = num_trees, y = bag.r.sqr), color = "green", size = 2)
+
+bag <- ranger(Metric~.,data=rivers,num.trees = 1000, mtry = ncol(rivers) - 1, importance = "permutation") #can also use ~formula notation if we had a formal dataset
+bag$prediction.error # out-of-bag MSE
+
+yhat.bag <- predict(forest, data = rivers[1:10,])$predictions
+(yhat.bag - rivers$Metric[1:10])^2 %>% mean()
+
+rivers$Metric[1:10]
+yhat.bag
+bag$r.squared
+
+```
+
+
+```{r}
+### Random Forests
+sqrt(ncol(train))
+
+forest <- ranger(Metric~.,data=rivers,num.trees = 300, mtry = 10) #can also use ~formula notation if we had a formal dataset
+forest$prediction.error # out-of-bag MSE
+forest$r.squared
+
+splits <- list()
+already.used <- NA
+for(i in 2:K){
+  samp <- sample(possibilities, this.many, replace = FALSE)
+  splits[[i]] <- samp
+  possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+}
+splits[[1]] = possibilities
+
+
+SSE <-SumE <- 0
+oob.mse.gbm <- NA
+boost.rsq <- NA
+oob.mse.ran <- NA
+for(i in 1:5){
+  train.data = rivers[-splits[[i]],]
+  test.data = rivers[splits[[i]], ]
+  
+  forest <- ranger(Metric~.,data=train.data,num.trees = 300, mtry = 10) 
+  
+  oob.mse.ran[i] <- forest$prediction.error
+  
+  SSE = SSE + sum((p - test.data$Metric)^2)
+  SumE = SumE + sum(p - test.data$Metric)
+}
+
+mean(oob.mse.ran)
+
+mse = (SSE/nrow(rivers))
+bias = SumE/nrow(rivers)
+rsq = 1- SSE/(sum((rivers$Metric - mean(rivers$Metric))^2))
+mse
+bias
+rsq
+```
+
+
+```{r}
+### Boosting
+library(gbm)
+gbm1 <- gbm(Metric~.,data=rivers, distribution = "gaussian", n.trees = 800, interaction.depth = 6, shrinkage = 0.01, train.fraction = 0.8, 
+            cv.folds = 10)  
+
+
+# Check performance using the out-of-bag (OOB) error; the OOB error typically
+# underestimates the optimal number of iterations
+best.iter <- gbm.perf(gbm1, method = "OOB")
+print(best.iter)
+
+# Check performance using the 20% heldout test set
+best.iter <- gbm.perf(gbm1, method = "test")
+print(best.iter)
+
+# Check performance using 5-fold cross-validation
+best.iter <- gbm.perf(gbm1, method = "cv")
+print(best.iter)
+
+# Plot relative influence of each variable
+par(mfrow = c(1, 2))
+summary(gbm1, n.trees = 1)          # using first tree
+
+summary(gbm1, n.trees = best.iter)  # using estimated best number of trees
+
+
+# Compactly print the first and last trees for curiosity
+print(pretty.gbm.tree(gbm1, i.tree = 1))
+print(pretty.gbm.tree(gbm1, i.tree = gbm1$n.trees))
+```
+
+
+```{r}
+
+# Try the best gbm model
+num_trees <- seq(1,600, length.out = 100)
+
+
+### Identify test sets
+K = 5
+possibilities = 1:nrow(rivers)
+this.many = round(nrow(rivers)/K)
+
+splits <- list()
+already.used <- NA
+for(i in 2:K){
+  samp <- sample(possibilities, this.many, replace = FALSE)
+  splits[[i]] <- samp
+  possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+}
+splits[[1]] = possibilities
+
+
+SSE <-SumE <- 0
+oob.mse.gbm <- NA
+boost.rsq <- NA
+for(i in 1:5){
+  train.data = rivers[-splits[[i]],]
+  test.data = rivers[splits[[i]], ]
+  
+  gbm1 <- gbm(Metric~.,data=train.data, distribution = "gaussian", n.trees = 690, interaction.depth = 6, shrinkage = 0.1)  
+  p = predict(gbm1, newdata = test.data)
+  
+  oob.mse.gbm[i] <- (p- test.data$Metric)^2 %>% mean()
+  boost.rsq[i] <- 1-(sum((p- test.data$Metric)^2)/sum((rivers$Metric - mean(rivers$Metric))^2))
+  
+  SSE = SSE + sum((p - test.data$Metric)^2)
+  SumE = SumE + sum(p - test.data$Metric)
+}
+
+
+mean(boost.rsq)
+mean(oob.mse.gbm)
+
+mse = (SSE/nrow(rivers))
+bias = SumE/nrow(rivers)
+rsq = 1- SSE/(sum((rivers$Metric - mean(rivers$Metric))^2))
+mse
+bias
+rsq
+
+
+# ggplot(mapping = aes(x = num_trees, y = oob.mse.gbm))+ 
+#       geom_line()
+mean(boost.rsq)
+mean(oob.mse.gbm)
+which.min(oob.mse.gbm)
+num_trees[56]
+mean(oob.mse.gbm)
+
+```
+
+```{r}
+
+library(caret)
+gbm_best <- gbm(Metric~.,data=rivers, distribution = "gaussian", n.trees = 600, interaction.depth = 6, shrinkage = 0.01)  
+
+varimp <- varImp(gbm_best, numTrees =  600)
+which.max(varimp$Overall)
+
+library(dplyr)
+varimp %>% arrange(-Overall)
+
+library(vip)
+vi(gbm_best)
+p3 <- vip(gbm_best, aesthetics = list(fill = "darkblue"), num_features = 5)  + theme_minimal() + labs(title = "Gradient Boosting Most Important Variables") 
+
+p3
+
+p3 <- vip(gbm_best, aesthetics = list(fill = "darkblue"), num_features = 21)  + theme_void() + labs(title = "Gradient Boosting Most Important Variables", subtitle = "") 
+
+
+p3
+
+p3 <- vip(gbm_best, aesthetics = list(fill = "darkblue"), num_features = 50) + labs(title = "Gradient Boosting Most Important Variables") 
+
+p3
+
+# Run a linear model on the most important variables
+
+varimp.lm <- lm(Metric ~ bio15 + cls8 + CumPrec01 + cls3 + MeanPrec11, data = rivers)
+summary(varimp.lm)
+colnames(rivers)
+
+hist(varimp.lm$residuals)
+library(car)
+avPlots(varimp.lm)
+
+table <- cbind(varimp.lm$coefficients[c(2:6)])
+table <- round(table[,1],2)
+knitr::kable(table, col.names = c("Estimate"), caption = "Estimates")
+
+vip(bag)
+```
+
+
+
+```{r}
+
+library(rpart) # for fitting CART-like decision trees
+library(randomForest) # for fitting RFs
+library(xgboost) # for fitting GBMs
+# Fit a single regression tree
+tree <- rpart(Metric ~ ., data = rivers)
+# Fit an RF
+set.seed(101) # for reproducibility
+rfo <- randomForest(Metric ~ ., data = rivers, importance = TRUE)
+# Fit a GBM
+set.seed(102) # for reproducibility
+bst <- xgboost(
+  data = data.matrix(subset(rivers, select = -Metric)),
+  label = rivers$Metric,
+  objective = "reg:squarederror",
+  nrounds = 690,
+  max_depth = 6,
+  eta = 0.01,
+  verbose = 0 # suppress printing
+  )
+
+# Extract VI scores from each model
+vi_tree <- tree$variable.importance
+vi_rfo <- rfo$variable.importance # or use `randomForest::importance(rfo)`
+vi_bst <- xgb.importance(model = bst)
+
+
+# Load required packages
+library(vip)
+# Compute model-specific VI scores
+vi(tree)
+vi(bst)
+vi(rfo)
+
+# Plot
+
+p1 <- vip(tree) + ggtitle("Single tree")
+p2 <- vip(rfo) + ggtitle("Random forest")
+p3 <- vip(bst) + ggtitle("Gradient boosting")
+# Display plots in a grid (Figure 1)
+grid.arrange(p1, p2, p3, nrow = 1)
+
+
+plot(p3)
+plot(p2)
+plot(p1)
+
+
+
+
+```
+
+
+# CV using XGboost
+```{r}
+SSE <-SumE <- 0
+oob.mse.gbm <- NA
+boost.rsq <- NA
+for(i in 1:5){
+  train.data = rivers[-splits[[i]],]
+  test.data = rivers[splits[[i]], ]
+  
+  gbm1 <- xgboost(
+  data = data.matrix(subset(train.data, select = -Metric)),
+  label = train.data$Metric,
+  objective = "reg:squarederror",
+  nrounds = 690,
+  max_depth = 6,
+  eta = 0.01,
+  verbose = 0 # suppress printing
+  )  
+  p = predict(gbm1, newdata = data.matrix(subset(test.data, select = -Metric)))
+  
+  oob.mse.gbm[i] <- (p- test.data$Metric)^2 %>% mean()
+  boost.rsq[i] <- 1-(sum((p- test.data$Metric)^2)/sum((rivers$Metric - mean(rivers$Metric))^2))
+  
+  SSE = SSE + sum((p - test.data$Metric)^2)
+  SumE = SumE + sum(p - test.data$Metric)
+}
+
+mean(oob.mse.gbm)
+mean(boost.rsq)
+```
+
+
+```{r}
+### BART
+library(BayesTree)
+#bart <- bart(x.train = train[,-1], y.train = train$Metric, x.test = test, ntree = 200, ndpost=1000)
+
+library(BART) #we'll use gbart or wbart functions. (I'm pretty sure gbart just uses wbart when you put in a continuous outcome)
+library(magrittr)
+
+n.trees <- seq(20, 300, length.out = 10)
+oob.mse <- NA
+bart.rsq <- NA
+#120 trees i think is my best
+for(i in 1:5){
+  
+  train <- rivers[-splits[[i]],]
+  test <- rivers[splits[[i]],]
+  bart = gbart(x.train = train[,-1], y.train = train$Metric, x.test = test[,-1], ntree = 6000, ndpost=4000, nskip = 300, sparse = TRUE)
+  oob.mse[i] <- (bart$yhat.test.mean - test$Metric)^2 %>% mean()
+  bart.rsq[i] <- 1-(sum((bart$yhat.train.mean - train$Metric)^2)/sum((train$Metric - mean(train$Metric))^2))
+
+  
+}
+
+bart = gbart(x.train = train[,-1], y.train = train$Metric, x.test = test[,-1], ntree = 600, ndpost=4000, nskip = 300, sparse = TRUE)
+
+
+mean(oob.mse)
+mean(bart.rsq)
+
+bart.vip <- as.data.frame(sort(bart$varcount.mean, decreasing = TRUE))
+dim(bart.vip)
+
+
+```
+
+
+```{r}
+
+
+
+
+# Try it without dirichlet priors
+n.trees <- seq(20, 300, length.out = 10)
+oob.mse_noDir <- NA
+for(i in 1:10){
+  samp <- sample(1:102, 90)
+  train <- rivers[samp,]
+  test <- rivers[-samp,]
+  bart = gbart(x.train = train[,-1], y.train = train$Metric, x.test = test[,-1], ntree = n.trees[i], ndpost=2000, nskip = 300, sparse = FALSE)
+  oob.mse_noDir[i] <- (bart$yhat.test.mean - test$Metric)^2 %>% mean()
+  
+}
+
+
+mean(oob.mse_noDir)
+round(bart$yhat.test.mean, 2)
+round(test$Metric, 2)
+
+
+```
+

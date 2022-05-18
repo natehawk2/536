@@ -1,0 +1,637 @@
+---
+title: "Lodgepole Pine Prevalence in the Uintas"
+author: "Nathan Hawkins"
+output:
+  pdf_document: default
+  html_document: default
+
+geometry: "left=3cm,right=3cm,top=1.5cm,bottom=2cm"
+abstract: In this analysis, we develop a method of understanding and predicting prevalence of lodgepole pines in the Uintas. Using BART methodology we find which variables are most conducive to lodgepole pine growth, and predict new acres that have not yet been measured. The aspect or orientation of the acre slope is the most important variable. We also find that acres that are close to each other geographically tend to have similar lodgepole pine prevalence. We were also able to predict the lodgepole pine prevalence for any given area in the Uintas.
+---
+
+```{r include = FALSE}
+set.seed(1234)
+lp <- read.csv("LodgepoleInUintas.csv")
+train <- lp[!is.na(lp$Lodgepole),]
+test <- lp[is.na(lp$Lodgepole),]
+library(ggplot2)
+library(ranger)
+library(multcomp)
+library(tidyverse)
+library(corrplot)
+library(nlme)
+library(geoR)
+library(car)
+library(ggmap)
+library(patchwork)
+
+```
+
+```{r include = FALSE}
+### Identify test sets
+K = 5
+possibilities = 1:nrow(train)
+this.many = round(nrow(train)/K)
+
+splits <- list()
+already.used <- NA
+for(i in 2:K){
+  samp <- sample(possibilities, this.many, replace = FALSE)
+  splits[[i]] <- samp
+  possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+}
+splits[[1]] = possibilities
+
+
+### BART
+library(BayesTree)
+#bart <- bart(x.train = train[,-1], y.train = train$Metric, x.test = test, ntree = 200, ndpost=1000)
+
+library(BART) #we'll use gbart or wbart functions. (I'm pretty sure gbart just uses wbart when you put in a continuous outcome)
+library(magrittr)
+
+n.trees <- seq(20, 300, length.out = 10)
+oob.mse <- NA
+bart.rsq <- NA
+SSE_bart <- 0
+#120 trees i think is my best
+for(i in 1:5){
+  
+  train.data <- train[-splits[[i]],]
+  test.data <- train[splits[[i]],]
+  bart = gbart(x.train = train.data[,-6], y.train = train.data$Lodgepole, x.test = test.data[,-6], ntree = 100, ndpost=2000, nskip = 300, sparse = FALSE)
+  oob.mse[i] <- (bart$yhat.test.mean - test.data$Lodgepole)^2 %>% mean()
+  bart.rsq[i] <- 1-(sum((bart$yhat.train.mean - train.data$Lodgepole)^2)/sum((train.data$Lodgepole - mean(train.data$Lodgepole))^2))
+  SSE_bart = SSE_bart + sum((bart$yhat.train.mean - train.data$Lodgepole)^2)
+
+  
+}
+
+
+bart = gbart(x.train = train[,-6], y.train = train$Lodgepole, x.test = test[,-6], ntree = 100, ndpost=2000, nskip = 300, sparse = TRUE)
+
+sqrt(mean(oob.mse))
+1-SSE_bart/sum((train$Lodgepole - mean(train$Lodgepole))^2)
+
+bart.vip <- as.data.frame(sort(bart$varcount.mean, decreasing = TRUE))
+(bart.vip)
+
+nrow(train)
+lp[115:192,6] = bart$yhat.test.mean
+lp$train = c(rep(0,114), rep(1, 192-114))
+# ggmap(mymap)+geom_point(data=lp, mapping = aes(x=LON, y=LAT, color = Lodgepole, shape = as.factor(train)),  alpha=1, size = 4) + 
+#   scale_color_continuous(type = "viridis") +
+#   labs(title = "Prevalence of Lodgepole Pines in the Uintas") + theme(legend.position = "none") 
+
+
+
+```
+
+# Introduction
+
+Lodgepole pines play an important role in the Uinta National Forest's healthy ecosystem. They provide shade and shelter for many animals, as well as hold soil in place to prevent erosion so that other plants can grow. In recent years, pine beetles have unfortunately destroyed many of these iconic trees. When an outbreak occurs, forest rangers may chop down surrounding lodgepole pines in order to stop the infestation. It's possible, however, that this practice is unnecessary or could be avoided in areas with low density of lodgepole pines. To see the prevalence of lodgepole pines in an area, forest rangers will measure the circumference and area of every lodgepole pine within a square acre. The total area taken up by the lodgepole pines is divided by the acreage and this gives an idea of the lodgepole pine prevalence. Measuring every single tree in an acre can take a lot of time and effort so we will use statistical modeling to simplify this process.
+
+The goals of this study are to 1) understand which environmental factor are conducive to lodgepole pine prevalence, and 2) predict that prevalence in areas that haven't been measured. To do so, we will use a data set that has the Longitude, Latitude, Slope, Aspect (orientation on 360 scale), and Elevation of 192 different acres in the Uintas. 114 of these locations have already been measured for lodgepole pines. We will use these 114 locations to understand the relationships between the variables and predict on the other 78 locations. 
+
+Below is shown a map of the areas measured and the relative prevalence of lodgepole pines where yellow indicates an area with more pine trees and blue indicates fewer.
+
+```{r include = FALSE}
+bb <- make_bbox(lon=LON, lat=LAT, data=train)
+mymap <- get_map(location=bb, zoom=10, maptype="toner-hybrid")
+```
+
+
+```{r echo = FALSE, warning=FALSE, fig.heigh = 2.9, fig.asp = 0.5}
+ggmap(mymap)+geom_point(data=train, mapping = aes(x=LON, y=LAT, color = Lodgepole),  alpha=0.8, size = 4) + 
+  scale_color_continuous(type = "viridis") +
+  labs(title = "Prevalence of Lodgepole Pines in the Uintas") + theme(legend.position = "right")
+```
+
+There are definitely some areas that have more pines than others. For this reason, we will consider models with spatial correlation in our analysis. There is probably some predictive power to be had in knowing the prevalence in nearby areas. 
+
+One potential issue with this data is that the relationships between the independent and dependent variables are not always linear.
+
+```{r, echo = FALSE, fig.height = 3}
+
+p1 = ggplot(train, mapping = aes(x = Slope, y = Lodgepole)) + 
+  geom_point() + 
+  theme_minimal()
+
+p2 = ggplot(train, mapping = aes(x = Aspect, y = Lodgepole)) + 
+  geom_point() + 
+  labs(x = "Aspect (degrees)", y = "") + 
+  theme_minimal()
+
+p3 = ggplot(train, mapping = aes(x = ELEV, y = Lodgepole)) + 
+  geom_point() + 
+  labs(x = "Elevation (feet)", y = "") + 
+  theme_minimal()
+
+p1 + p2 + p3
+```
+It appears that lodgepole pines prefer an elevation between about 9000-10,500 feet, though this probably is not a linear relationship. Aspect and lodgepole pine prevalence also don't seem to have a linear relationship. The prevalence seems to be higher in acres with a slope that faces between 270-30 degrees, or north-facing. It does appear, however, that slope and prevalence have a somewhat linear relationship. We will need to take these non-linear effects into account when modeling. 
+
+
+# Modeling
+
+In this analysis we considered six potential models: a linear model with spatial correlation between longitude and latitude; boosting, bagging, random forest, and BART models; and a neural network. The linear model was deemed inappropriate both for non-linearity in the covariates as well as poor predictive performance. The other models had comparable out-of-sample predictive performance, but ultimately the BART model was chosen for being the most accurate and best at predicting.
+
+The following outline details the Bayesian Additive Regression Tree model computation.
+
+BART is a tree ensemble model, meaning that it takes regression trees and builds upon each tree to get a better and better fit. Here is an example of a regression tree with our data.
+
+```{r echo = FALSE, fig.height=3}
+
+library(rpart)
+library(rpart.plot)
+tree <- rpart(Lodgepole~.,data=train,  control=list(cp=0.03))
+#rpart.plot(tree)
+#plotcp(tree)
+min.cp <- tree$cptable[which.min(tree$cptable[,'xerror']),'CP']
+tree.pruned <- prune(tree, cp=min.cp)
+rpart.plot(tree.pruned)
+yhat.tree = predict(tree.pruned, newdata=test)
+
+```
+
+The regression tree finds the optimal places to split the data into similar groups based on the variables. Simply put, the BART model will take this first tree and make many small changes to it to get a better fit. Then it will find the error in the model and make a new tree to model that. This process is repeated many times until a final model is produced. 
+
+More technically speaking, the model starts by fitting the first tree:
+
+
+$$\hat{f^1}(x) = \sum\limits_{k = 1}^K \hat{f^{1}_k}(x) = \frac{1}{n} \sum\limits_{i = 1}^n y_i$$
+Where $\hat{f^1}(x)$ is tree 1. $K$ is the number of covariates (5 in our case), $n$ the number of observations, and $y_i$ the $i$th observation. 
+
+The for each tree $b$, each covariate $k$ and each observation $i$ compute the current partial residual
+
+$$ r_{i} = y_{i} -  \sum\limits_{k`<k} \hat{f^b_k}(x_i) - \sum\limits_{k`<k} \hat{f^{b-1}_k}(x_i)$$
+and fit a new tree $b$, $\hat{f^b_k}(x)$ to $r_i$ by randomly perturbing the kth tree from the previous iteration, $\hat{f^{b-1}_k}(x)$. This means that we randomly change up which covariates are used and what affect they have to see if we can make the fit better.
+
+Then compute $\hat{f^b}(x) = \sum^K_k=1\hat{f^b_k}(x)$ (the estimated changes) for each tree.
+
+After this we can compute the mean after L burn-in samples.
+
+$$\hat{f}(x) = \frac{1}{B-L}\sum^B_{b=L+1}\hat{f^b}(x)$$
+
+In our cross validation, we found the the optimal number of trees $B$ to be 100.  We used a burn-in $L = 300$ and 2000 posterior draws. Note that dirichlet priors are used as opposed to uniform priors.
+
+
+# Model Performance
+
+The following table shows the cross-validated model performance metrics considered in deciding on the BART model. Metrics were generated using K-fold cross validation on subsets of the training data.
+
+```{r echo = FALSE}
+table <- data.frame("Model" = c("BART", "Linear", "Bagging", "Random Forest", "Boosting", "Neural Net"), RMSE = c(3.35, 6.15, 3.81, 3.78, 3.72, 5.96), "R Squared" = c(0.76, 0.03, 0.63, 0.63, 0.64, 0.07))
+knitr::kable(table, col.names = c("Model", "RMSE", "R Squared"))
+```
+
+Because BART has both the highest RMSE and highest $R^2$ we chose to use it for these data. BART has an out-of-sample RMSE of 3.35. This is very good when compared to the standard deviation of the data (6.24). This means that the model is off on average by about 3.35. This model also has an $R^2$ value of 0.76 which means that it can explain approximately 76% of the total variance in the data. The bias of this model is also very good, 0.04. This means that the model isn't systematically predicting too high or too low. It is interesting to note that although the linear model accounted for the spatial correlation, it still was not very good at prediction or inference. This is likely due to the non-linearity of the other covariates.
+
+# Results
+
+We are interested in which factors most influence the prevalence of lodgepole pines. These are found by looking at what the most common splits were in the BART decision trees. Below we show the most important factors:
+
+```{r echo = FALSE, fig.height=3}
+bart.vip <- as.data.frame(sort(bart$varcount.mean, decreasing = TRUE))
+vip.df <- data.frame("Variable" = names(bart$varcount.mean), "Importance" = bart$varcount.mean)
+ggplot(vip.df, mapping = aes(y = reorder(as.factor(Variable), Importance), x = Importance)) + 
+  geom_col(fill = "darkblue", width = 0.67) + 
+  labs(y = "Variable", title = "Most Important Variables") +
+  theme(plot.margin=unit(c(-0.20,0,0,0), "null")) +
+  theme_minimal()
+```
+
+It appears that all of the factors are used a fair amount. That being said, it looks like aspect is the most deterministic factor of lodgepole pine prevalence. In the introduction section we saw that acres that were oriented between around 270-30 degrees had the most lodgepole pines. So we expect that areas in the Uintas that are north-facing will grow the most pine trees. Longitude and Latitude are the next most important factors. This is unsurprising given the spatial correlation observed above in the map of the forest. The BART model is likely picking up on this spatial correlation and grouping together the acres that have similar longitude and latitude. 
+
+Another goal of this analysis was to predict the lodgepole pine prevalence in the areas where measurements were not taken. The predictions from the BART model are added onto the previous map as triangles. Again the observations that are more yellow have more lodgepole pines than the bluer observations.
+
+```{r echo = FALSE, fig.cap = "Lodgepole Pine prevalence predictions. Triangles are predicted values and circles are known. Observations that are more yellow indicate higher lodgepole pine prevalence and more blue indicate lower prevalence.", fig.asp=0.5}
+ggmap(mymap)+geom_point(data=lp, mapping = aes(x=LON, y=LAT, color = Lodgepole, shape = as.factor(train), size = as.factor(train))) +
+  scale_color_continuous(type = "viridis") +
+  scale_size_manual(values = c(3.5,4.5)) +
+  labs(title = "Predictions for Prevalence of Lodgepole Pines in the Uintas") + theme(legend.position = "none")
+
+```
+The predictions seem to be very similar to the known values that are close to them spatially. This leads me to believe that the model has been able to account for some of the spatial correlation inherent in the data. We can now predict with some certainty any value of any acre in the Uintas given we know some information about the acre. Caution should be used in predicting these values, the model is not perfect and their is some uncertainty inherent in any prediction. However, this method will save researchers and park rangers lots of time and money in collecting data.
+
+# Conclusion
+
+In this analysis, we  developed a method of understanding and predicting prevalence of lodgepole pines in the Uintas. Using BART methodology we found which variables were most conducive to lodgepole pine growth, and predicted new acres that have not yet been measured. The aspect or orientation of the acre slope is the most important variable; it appears that lodgepole pines like to grow on slopes that face North. We also found that acres that are close to each other geographically tend to have similar lodgepole pine prevalence. We were also able to predict the lodgepole pine prevalence for any given area in the Uintas. Although this prediction is not perfect, it is an efficient and accurate alternative to measuring each tree individually.
+
+
+```{r include = FALSE}
+train.exp.lm <- gls(model=Lodgepole ~ Slope + Aspect + ELEV, data=train,
+                                correlation=corExp(form=~LON+LAT, nugget=TRUE), 
+                                #weights = varExp(form = ~Gr.Liv.Area), 
+                                method="ML")
+train.gaus.lm <- gls(model=Lodgepole ~ Slope + Aspect + ELEV, data=train,
+                                correlation=corGaus(form=~LON+LAT, nugget=TRUE), 
+                                #weights = varExp(form = ~Gr.Liv.Area), 
+                                method="ML")
+
+train.spher.lm <- gls(model=Lodgepole ~ Slope + Aspect + ELEV, data=train,
+                                correlation=corSpher(form=~LON+LAT, nugget=TRUE), 
+                                #weights = varExp(form = ~Gr.Liv.Area), 
+                                method="ML")
+
+
+summary(train.exp.lm)
+summary(train.gaus.lm)
+summary(train.spher.lm)
+
+AIC(train.exp.lm)
+AIC(train.spher.lm)
+AIC(train.gaus.lm)
+source("stdres.gls.R")
+```
+
+```{r include = FALSE}
+### Identify test sets
+# K = 5
+# possibilities = 1:nrow(train)
+# this.many = round(nrow(train)/K)
+# 
+# splits <- list()
+# already.used <- NA
+# for(i in 2:K){
+#   samp <- sample(possibilities, this.many, replace = FALSE)
+#   splits[[i]] <- samp
+#   possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+# }
+# splits[[1]] = possibilities
+# 
+# 
+# SSE <-SumE <- 0
+# lm.mse <- NA
+# for(i in 1:5){
+#   train.data = train[-splits[[i]],]
+#   test.data = train[splits[[i]], ]
+#   
+#   train.spher.lm <- gls(model=Lodgepole ~ Slope + Aspect + ELEV, data=train.data,
+#                                 correlation=corSpher(form=~LON+LAT, nugget=TRUE), 
+#                                 #weights = varExp(form = ~Gr.Liv.Area), 
+#                                 method="ML")
+#   
+#   p = predict(train.spher.lm, newdata = test.data)
+#   
+#   lm.mse[i] <- (p- test.data$Lodgepole)^2 %>% mean()
+# 
+#   SSE = SSE + sum((p - test.data$Lodgepole)^2)
+#   SumE = SumE + sum(p - test.data$Lodgepole)
+# }
+# 
+# sqrt(mean(lm.mse))
+# 1-SSE/sum((train$Lodgepole-mean(train$Lodgepole))^2)
+# 1-SSE/sum((train$Lodgepole - mean(train$Lodgepole))^2)
+```
+
+
+
+```{r include = FALSE}
+# train.lm <- lm(Lodgepole ~ Slope + Aspect + ELEV , data=train)
+# AIC(train.lm)
+# 
+# source("stdres.gls.R")
+# lp.matrix <- matrix(c(train$LON, train$LAT), ncol = 2, nrow = nrow(train))
+# 
+# 
+# myVariogram2 <- variog(coords = lp.matrix, data = train.lm$residuals)
+# plot(myVariogram2)
+# 
+# myVariogram2 <- variog(coords = lp.matrix, data = stdres.gls(train.gaus.lm))
+# plot(myVariogram2)
+# 
+# 
+# ggplot() + geom_point(mapping = aes(x = fitted(train.spher.lm), y = stdres.gls(train.spher.lm))) + 
+#   labs(title = "Scatterplot of fitted values vs decorrelated residuals", 
+#        y = "Decorrelated Residuals", 
+#        x = "Fitted Values")
+# 
+# ggplot() + geom_point(mapping = aes(x = fitted(train.lm), y = stdres.gls(train.lm))) + 
+#   labs(title = "Scatterplot of fitted values vs decorrelated residuals", 
+#        y = "Decorrelated Residuals", 
+#        x = "Fitted Values")
+```
+
+
+
+
+```{r include = FALSE}
+# ### Bagging
+# library(ranger)
+# library(gbm)
+# library(Rcpp)
+# library(magrittr)
+# 
+# num_trees <- seq(1,500, length.out = 100)
+# bag.pred.error <- c()
+# bag.r.sqr <- c()
+# for(i in 1:100){
+#   bag <- ranger(Lodgepole~.,data=train,num.trees = 500, mtry = ncol(train) - 1, importance = "none") 
+#   bag.pred.error[i] <- bag$prediction.error
+#   bag.r.sqr[i] <- bag$r.squared
+# }
+# 
+# plot(num_trees, bag.pred.error)
+# 
+# library(ggplot2)
+# ggplot(mapping = aes(x = num_trees, y = bag.pred.error)) + 
+#   geom_line(color ="blue", size = 2) + 
+#   geom_line(mapping = aes(x = num_trees, y = bag.r.sqr), color = "green", size = 2)
+# 
+# bag <- ranger(Lodgepole~.,data=train,num.trees = 1000, mtry = ncol(train) - 1, importance = "permutation") #can also use ~formula notation if we had a formal dataset
+# sqrt(bag$prediction.error) # out-of-bag MSE
+# 
+# # yhat.bag <- predict(forest, data = train[1:10,])$predictions
+# # (yhat.bag - train$Lodgepole[1:10])^2 %>% mean()
+# # 
+# # train$Lodgepole[1:10]
+# 
+# bag$r.squared
+```
+
+
+
+```{r include = FALSE}
+### Random Forest
+# library(ranger)
+# library(gbm)
+# library(Rcpp)
+# library(magrittr)
+# 
+# num_trees <- seq(1,500, length.out = 100)
+# rf.pred.error <- c()
+# rf.r.sqr <- c()
+# for(i in 1:100){
+#   rf <- ranger(Lodgepole~.,data=train,num.trees = 500, mtry = 2, importance = "none") 
+#   rf.pred.error[i] <- rf$prediction.error
+#   rf.r.sqr[i] <- rf$r.squared
+# }
+# 
+# 
+# library(ggplot2)
+# ggplot(mapping = aes(x = num_trees, y = rf.pred.error)) + 
+#   geom_line(color ="blue", size = 2) + 
+#   geom_line(mapping = aes(x = num_trees, y = rf.r.sqr* 100), color = "green", size = 2)
+# 
+# rf <- ranger(Lodgepole~.,data=train,num.trees = 500, mtry = 2, importance = "permutation") #can also use ~formula notation if we had a formal dataset
+# sqrt(rf$prediction.error) # out-of-rf MSE
+# 
+# # yhat.rf <- predict(forest, data = train[1:10,])$predictions
+# # (yhat.rf - train$Lodgepole[1:10])^2 %>% mean()
+# # 
+# # train$Lodgepole[1:10]
+# 
+# rf$r.squared
+# sd(train$Lodgepole)
+```
+
+
+```{r include = FALSE}
+### Boosting
+# library(gbm)
+# gbm1 <- gbm(Lodgepole~.,data=train, distribution = "gaussian", n.trees = 3000, interaction.depth = 5, shrinkage = 0.01, train.fraction = 0.8, 
+#             cv.folds = 10)  
+# 
+# 
+# # Check performance using the out-of-bag (OOB) error; the OOB error typically
+# # underestimates the optimal number of iterations
+# best.iter <- gbm.perf(gbm1, method = "OOB")
+# print(best.iter)
+# 
+# # Check performance using the 20% heldout test set
+# best.iter <- gbm.perf(gbm1, method = "test")
+# print(best.iter)
+# 
+# # Check performance using 5-fold cross-validation
+# best.iter <- gbm.perf(gbm1, method = "cv")
+# print(best.iter)
+# 
+# # Plot relative influence of each variable
+# par(mfrow = c(1, 2))
+# summary(gbm1, n.trees = 1)          # using first tree
+# 
+# summary(gbm1, n.trees = best.iter)  # using estimated best number of trees
+# 
+# 
+# # Compactly print the first and last trees for curiosity
+# print(pretty.gbm.tree(gbm1, i.tree = 1))
+# print(pretty.gbm.tree(gbm1, i.tree = gbm1$n.trees))
+```
+
+
+```{r include = FALSE}
+# # Try the best gbm model
+# num_trees <- seq(1,600, length.out = 100)
+# 
+# 
+# ### Identify test sets
+# K = 5
+# possibilities = 1:nrow(train)
+# this.many = round(nrow(train)/K)
+# 
+# splits <- list()
+# already.used <- NA
+# for(i in 2:K){
+#   samp <- sample(possibilities, this.many, replace = FALSE)
+#   splits[[i]] <- samp
+#   possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+# }
+# splits[[1]] = possibilities
+# 
+# 
+# SSE <-SumE <- 0
+# oob.mse.gbm <- NA
+# boost.rsq <- NA
+# for(i in 1:5){
+#   train.data = train[-splits[[i]],]
+#   test.data = train[splits[[i]], ]
+#   
+#   gbm1 <- gbm(Lodgepole~.,data=train.data, distribution = "gaussian", n.trees = 3000, interaction.depth = 4, shrinkage = 0.01)  
+#   p = predict(gbm1, newdata = test.data)
+#   
+#   oob.mse.gbm[i] <- (p- test.data$Lodgepole)^2 %>% mean()
+#   boost.rsq[i] <- 1-(sum((p- test.data$Lodgepole)^2)/sum((train$Lodgepole - mean(train$Lodgepole))^2))
+#   
+#   SSE = SSE + sum((p - test.data$Lodgepole)^2)
+#   SumE = SumE + sum(p - test.data$Lodgepole)
+# }
+# 
+# 
+# mean(boost.rsq)
+# mean(oob.mse.gbm)
+# 
+# mse = (SSE/nrow(train))
+# bias = SumE/nrow(train)
+# rsq = 1- SSE/(sum((train$Lodgepole - mean(train$Lodgepole))^2))
+# sqrt(mse)
+# bias
+# rsq
+# 
+# 
+# gbm1 <- gbm(Lodgepole~.,data=train, distribution = "gaussian", n.trees = 3000, interaction.depth = 4, shrinkage = 0.01)  
+# library(vip)
+# 
+# vip(gbm1)
+# 
+
+
+```
+
+
+```{r include = FALSE}
+# ### BART
+# library(BayesTree)
+# #bart <- bart(x.train = train[,-1], y.train = train$Metric, x.test = test, ntree = 200, ndpost=1000)
+# 
+# library(BART) #we'll use gbart or wbart functions. (I'm pretty sure gbart just uses wbart when you put in a continuous outcome)
+# library(magrittr)
+# 
+# n.trees <- seq(20, 300, length.out = 10)
+# oob.mse <- NA
+# bart.rsq <- NA
+# SSE_bart <- 0
+# #120 trees i think is my best
+# for(i in 1:5){
+#   
+#   train.data <- train[-splits[[i]],]
+#   test.data <- train[splits[[i]],]
+#   bart = gbart(x.train = train.data[,-6], y.train = train.data$Lodgepole, x.test = test.data[,-6], ntree = 100, ndpost=2000, nskip = 300, sparse = FALSE)
+#   oob.mse[i] <- (bart$yhat.test.mean - test.data$Lodgepole)^2 %>% mean()
+#   bart.rsq[i] <- 1-(sum((bart$yhat.train.mean - train.data$Lodgepole)^2)/sum((train.data$Lodgepole - mean(train.data$Lodgepole))^2))
+#   SSE_bart = SSE_bart + sum((bart$yhat.train.mean - train.data$Lodgepole)^2)
+# 
+#   
+# }
+# 
+# 
+# bart = gbart(x.train = train[,-6], y.train = train$Lodgepole, x.test = test[,-6], ntree = 100, ndpost=2000, nskip = 300, sparse = TRUE)
+# 
+# sqrt(mean(oob.mse))
+# mean(bart.rsq)
+# 1-SSE_bart/sum((train$Lodgepole - mean(train$Lodgepole))^2)
+# 
+# bart.vip <- as.data.frame(sort(bart$varcount.mean, decreasing = TRUE))
+# (bart.vip)
+# 
+# nrow(train)
+# lp[115:192,6] = bart$yhat.test.mean
+# lp$train = c(rep(1,114), rep(0, 192-114))
+# ggmap(mymap)+geom_point(data=lp, mapping = aes(x=LON, y=LAT, color = Lodgepole, shape = as.factor(train)),  alpha=1, size = 4) + 
+#   scale_color_continuous(type = "viridis") +
+#   labs(title = "Prevalence of Lodgepole Pines in the Uintas") + theme(legend.position = "none") 
+# 
+
+
+```
+
+```{r include = FALSE}
+# library(neuralnet)
+# relu = function(x) {ifelse(x<0,0*x,x)}
+# 
+# relu_diff <- function(x) {x/(1+exp(-2*10*x))}
+# hist(train$Lodgepole/35)
+# 
+# train.data
+# hist(scale(train.data$Slope, center = TRUE))
+# 
+# hist(train$Slope/120)
+# 
+# range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+# undorange01 <- function(x) {(min(tra))}
+# min(train$Lodgepole)
+# max(train$Lodgepole) - min(train$Lodgepole)
+# train.data1 = train
+# 
+# train.data1$Slope = range01(train$Slope)
+# train.data1$LON = range01(train$LON)
+# train.data1$LAT = range01(train$LAT)
+# train.data1$Aspect = range01(train$Aspect)
+# train.data1$ELEV = range01(train$ELEV)
+# train.data1$Lodgepole = range01(train$Lodgepole)
+# 
+# 
+# oob.mse.nn <- NA
+# nn.rsq <- NA
+# SSE = 0
+# SumE = 0
+# 
+# for(i in 1:5){
+#   train.data <- train.data1[-splits[[i]],]
+#   test.data <- train.data1[splits[[i]],]
+#   
+#   nn=neuralnet(Lodgepole~ . ,data=train.data, 
+#              hidden=c(2,4),
+#              act.fct = relu_diff, 
+#              threshold = 0.1, 
+#              learningrate = 0.01,
+#              linear.output=TRUE)
+#   p = predict(nn, newdata = test.data)
+#   p = p * (max(train$Lodgepole) - min(train$Lodgepole)) + min(train$Lodgepole)
+# 
+#   
+#   oob.mse.nn[i] <- (p- (test.data$Lodgepole* (max(train$Lodgepole) - min(train$Lodgepole)) + min(train$Lodgepole)))^2 %>% mean()
+#   nn.rsq[i] <- 1-(sum((p- test.data$Lodgepole)^2)/sum((train$Lodgepole - mean(train$Lodgepole))^2))
+#   
+#   thing = (max(train$Lodgepole) - min(train$Lodgepole) + min(train$Lodgepole))
+#   
+#   SSE = SSE + sum((p - (test.data$Lodgepole*thing))^2)
+#   #SumE = SumE + sum(p - test.data$Lodgepole)
+#   
+# }
+# 
+# sqrt(mean(oob.mse.nn))
+# 1-SSE/sum((train$Lodgepole - mean(train$Lodgepole))^2)
+# 
+# p = predict(nn,newdata = test)
+
+
+```
+
+
+```{r}
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+min(train$Lodgepole)
+max(train$Lodgepole) - min(train$Lodgepole)
+train.data1 = train
+
+train.data1$Slope = range01(train$Slope)
+train.data1$LON = range01(train$LON)
+train.data1$LAT = range01(train$LAT)
+train.data1$Aspect = range01(train$Aspect)
+train.data1$ELEV = range01(train$ELEV)
+
+test.data1 <- test
+test.data1$Slope = range01(test$Slope)
+test.data1$LON = range01(test$LON)
+test.data1$LAT = range01(test$LAT)
+test.data1$Aspect = range01(test$Aspect)
+test.data1$ELEV = range01(test$ELEV)
+
+
+library(ppmSuite)
+y = train$Lodgepole
+out = train.data1[1:5,]
+new_data = test.data1[1:5,]
+simParms <- c(0.0, 1.0, 0.1, 1.0, 2.0, 0.1)
+    draws <- 10000
+    burn <- 3000
+    thin <- 50
+    nout <- (draws - burn)/thin
+  
+fit_1 <- gaussian_ppmx(y = y, 
+                           X = out, 
+                           Xpred = new_data,
+                           similarity_function = 1, 
+                           consim = 1,
+                           calibrate = 0,
+                           simParms = simParms,
+                           draws = draws, 
+                           burn = burn, 
+                           thin = thin, 
+                           verbose = TRUE)
+    
+    fit_1.fitted <- apply(fit_1$fitted.values,2, mean)
+    fit_1.preds <- apply(fit_1$ppred,2, mean)
+```
+

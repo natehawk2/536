@@ -1,0 +1,319 @@
+---
+title: "Solar Panel Energy Ouput"
+author: "Nate Hawkins and Bethany Bassett"
+date: "10/25/2021"
+output:
+  
+  pdf_document: default
+  html_document: default
+editor_options:
+  
+  chunk_output_type: console
+abstract: Solar power has become an increasingly popular way to generate power in a renewable and sustainable way. We used a time series model to analyze the affects of seasonality and time on the energy a solar panel is able to collect. Through cross-validation, we found that the best Arima model had one auto-regressive term. Overall, our model did reasonably well at meeting the goals of the study and predicting the future energy that would be generated over time.
+---
+
+```{r include = FALSE}
+rm(list = ls())
+kwh <- read.csv("kwh.csv")
+library(astsa)
+library(ggplot2)
+library(lubridate)
+library(forecast)
+library(tidyverse)
+library(patchwork)
+kwh$Date <- as.Date(kwh$Date)
+```
+
+
+# Introduction
+
+Solar power is an environmentally-friendly alternative to other forms of energy. In recent years, many home-owners have invested in installing solar panels to be placed on their homes. We are interested in knowing how much energy a solar panel can generate, as measured in kilo-watt hours (kWh). Understanding energy output over time would help companies in making better solar panels, help consumers understand how much energy they will get, and aid scientists in understanding the future of energy generation. In this analysis, we seek to 1) understand how energy output of the panels change over time, 2) estimate when a panel will lose 50% of its efficiency, and 3) forecast for one year the energy output for a solar panel. To do this analysis, we have a data set with the daily energy output of a solar panel. The kWh for this panel was measured once a day for three years as shown below.
+
+```{r fig.cap="kiloWatt hours across time", fig.height = 4, fig.width=8, out.width = "90%", fig.align = 'center', message = FALSE, echo = FALSE, warning=FALSE}
+
+ggplot(data = kwh, mapping = aes(x = Date, y = kwh)) + 
+  geom_line(color = "darkblue", lwd = 1) + 
+  geom_smooth(color = "darkgrey", lwd = 2, se = FALSE, method = 'gam', formula = 'y ~ s(x, bs = "cs")') + 
+  labs(title = "Solar Panel Output", x = "") + 
+  theme_minimal()
+
+#suppressWarnings(print(kWh_plot))
+
+```
+
+
+Notice that there are definitely some months that are higher (summer) or lower (winter) in energy generation than others. We can also see that the kiloWatt hours are likely decreasing on average each year. These will be important things to consider when constructing our model. We can also see that the data are very temporally correlated (knowing what happened yesterday or last year helps me know what today's output will be). Choosing a model that did not account for these correlations would result in an inaccurate/imprecise model. There is a lot of predictive power that is gained by accounting for the relatedness of the outputs on different days. For example, if last December 5th didn't result in much kWh, we are fairly certain that this year's December 5th will also be low.
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r include = FALSE}
+inds <- seq(as.Date("2017-01-01"), as.Date("2019-12-31"), by = "day")
+
+kwhts <- ts(kwh$kwh,
+            start = c(2017, as.numeric(format(inds[1], "%j"))),
+            frequency = 365)
+fit <- Arima(kwhts, order=c(1,0,0), xreg=cbind(fourier(kwhts, K = 1), t = 1:1095))
+
+summary(fit)
+
+
+
+## Forecast forward 5 years
+plot(forecast(fit, h=365, xreg=cbind(fourier(kwhts, K=1, h=365*5), t = 1095:((1095+364)*5))))
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+#  Model Used
+
+## Time Series Models
+
+Before we can chose the best model, we first analyze the nature of the data, as well as the goals and questions we want to answer. The data provides information for the amount of solar energy generated each day over the course of three years, so it is correlated in time. As we model our data, one of the goals we have is using the model to predict solar energy patterns based off of factors such as seasonality and overall trend over consecutive years. Because of the correlation with time, the typical linear regression model cannot accurately calculate correct confidence and prediction intervals. Also, tree models and neural networks work well when we have multiple variables. Since we are only looking at two variables: solar energy and time, a tree model and neural network will not do well at predicting into the future. Time series models are made specifically to deal with data that is correlated through time, and does well at making predictions into the future. For these reasons, we chose a time series model to make predictions for our data.
+
+
+## Assumptions
+
+Because we are using a Gaussian process regression, there are certain assumptions that we need to meet. We need to show that the data is multivariate normal, there is constant variance, and we need to show independence. However, we already know that there is not independence because of our data is correlated, so we first de-correlate the data to check this assumption. These ACF plots show the lag out to 365 days. When we check the independence assumption, we see that there is a correlation with the beginning of each year (seen in the ACF model). For this reason, we had to account for this change by using a fourier method in our model. This method works well with sinusoidal curves, like the ones we see when we plot our data. After making this adjustment, using a frequency of 1/365, we rerun our independence assumption and find that it is met.
+
+```{r fig.cap="Plots used to check assumptions", fig.height = 4, fig.width=8, out.width = "80%", fig.align = 'center', message = FALSE, echo = FALSE}
+
+par(mfrow = c(1,2))
+#independence
+pa <- pacf(fit$residuals, lag.max = 365, plot = FALSE)
+plot(pa, main = "Time Series PACF")
+ac <- acf(fit$residuals, lag.max = 365, plot= FALSE)
+plot(ac, main = "Time Series ACF")
+#normality
+```
+
+
+
+We can also see from the histogram that the assumption of normality is met as we plot the residuals of our model, because it looks normally distributed. We also have equal variance, as can be seen in the scatter plot of fitted values and residuals because there are no patterns or trends observed.
+
+```{r fig.cap="Plots used to check assumptions", fig.height = 4, fig.width=8, out.width = "80%", fig.align = 'center', message = FALSE, echo = FALSE}
+library(ggplot2)
+p1 <- ggplot()+geom_density(mapping = aes( x= fit$residuals)) +labs(y= "Density", x = "Model Residuals") + ggtitle('Normality of Residuals') + theme_minimal()
+#equal Variance
+p2 <- ggplot()+geom_point(mapping = aes( x= fit$fitted,
+                                     y = fit$residuals)) +labs(y= "Residuals", x = "Fitted Values") + ggtitle('Variance of the Residuals') + theme_minimal()
+
+p1+p2
+```
+
+
+## Model Formula
+
+Using the auto-arima function, which calculates the best ARIMA function, we determine that we should use values of p=1, q=0, and d=0, where p is the number of autoregressive terms, d is the number of nonseasonal differences needed for stationarity, and q is the number of lagged forecast errors in the prediction equation. So for our equation, we included only 1 autoregressive term.
+Below we have the model description:
+
+
+
+$$Y_t=\mu_t+\epsilon_t$$
+$$\mu_t = \beta_0+\beta_1t+\beta_2\cos(2\pi f t)+\beta_3\sin(2\pi ft)$$
+
+$$\epsilon_t =\phi \epsilon_{t-1}+\omega_t$$
+$$\omega_t\sim N(0 \text{, } \sigma^2)$$
+
+$\phi$ This term is the auto regressive coefficient of the residuals
+
+$\omega$- Residuals of $\epsilon$ which are the residuals of the mean function
+
+$\mu_t$ This term represents the mean function, or the mean expected kWh at t number of days
+
+$\beta_{0}$ Allows the intercept to vary, where the intercept is $\beta_0$ + $\beta_2$. This term represents the y-intercept, or the average kWh of solar energy
+
+$\beta_{1}$ This term represents a linear day effect, or the amount that kWh solar energy will change on average when time increases by one day, holding all other variables constant
+
+$\beta_{2}$ This term represents the sinusoidal coefficient for cos ($\cos(2\pi ft)$), holding all other variables constant, on average (where $\frac{1}{365}$ is the frequency and t is the time unit measured in days)
+
+$\beta_{3}$ This term represents the fourier coefficient for sin ($\sin(2\pi ft)$), holding all other variables constant, on average (where $\frac{1}{365}$ is the frequency and t is the time unit measured in days)
+
+$Y_t$ Daily kWh of the solar panel
+
+
+
+## Model Comparison
+
+We run a cross-validation to make sure that the AR(1) process is the most effective for these data. To do so, we train the model on 1 year and 6 months and test it on the next year. We then train it on the one year and seven months then train it on the year after that. This process is continued 6 times until we've included all of the set for cross validation. At each of these iterations we calculate the out-of-sample RMSE and bias of each of our potential models. The results are output below.
+
+```{r echo = FALSE}
+# RMSE/R^2 Comparison
+table <- data.frame("Method" = c("Arima(1,0,0)", "Arima(1,1,0)", "Arima(1,1,1)"), "RMSE" = c(7.88, 15.7, 7.87), "Bias" = c(-1.81, -1.29, -1.84))
+knitr::kable(table, caption = "Cross-validated model summaries")
+```
+
+The ARIMA(1,1,1) and ARIMA(1,0,0) models are very similar in both RMSE and bias. We therefore choose the simpler ARIMA(1,0,0) model for these data. Note that the fourier process was included in each of these models.
+
+Our model has an RMSE of 7.88. This means that our predictions are off by about 7.9 on average. The energy output has a standard deviation of 10.1 so we are doing well at modeling the data. The cross-validated bias of our model is -1.8. This means that our model is predicting a little bit low on average. However, these cross-validations are done on a very limited space. We don't have much data to train the model on before it has to predict. This is why the bias and RMSE are not as good as perhaps they could be. They are mostly just useful for model comparison in this context. Our model has a very good in-sample RMSE of 4.56. So the model fits the data very well. The psuedo R-squared for our model is 0.98. That means the variables in our model account for 98% of the overall variance of the energy output.
+
+
+
+
+# Results
+
+Estimates of the model are give in in Table 2 below
+
+Table 2: Estimates of the forecasting model parameters in Equation (1), with their standard errors (SE).
+
+ 
+|Parameter|Estimate|SE|Coefficient Description |
+|:---------|---:|---:|:---|
+|$\beta_{0}$|33.77|1.36|Intercept|
+|$\beta_{1}$|-0.0046|0.0022|Day Effect|
+|$\beta_{2}$|-9.3870|0.9353|Fourier Coefficient|
+|$\beta_{3}$|-0.2218|0.9745|Fourier Coefficient|
+|$\sigma^2$|20.87||Variance Estimate|
+
+The intercept term of 33.77 shows our estimated output for the first day. All the other effects increase over time. First, we seek to know how energy outputs change over time. Our model estimates that the effect for an extra day is -0.0046. This means that holding all else constant we expect the kWh to go down my 0.0046 from one day to the next. Using a general linear hypothesis test, we find that from one year to the next we expect the output to go down by about -1.679 or between -0.8949 and -2.4741 with 95% confidence. 
+
+We expect this trend to continue linearly for the future. Assuming that this trend will continue, after ten years we would expect the average yearly energy output to go from 33.75 to about 16.5, or roughly half of the original output. Therefore we estimate the half life of the solar panel to be about ten years. However, because we are estimating out ten years, the standard errors are very high and consequently the confidence bands will be very large. Therefore caution should be used with this prediction, it is very possible the trend will change in the next ten years. Finally, we predict the energy output for every day in the next year, as seen in the plot below. Observe that the seasonal trend is continued along with a slight decrease in kWh outputs in general.
+
+```{r echo = FALSE, fig.cap="Prediction for next years kWh output", fig.height=4, fig.width = 8, fig.align='center', out.width="90%"}
+#plot(forecast(fit, h=365, xreg=cbind(fourier(kwhts, K=1, h=365), t = 1095:((1095+364)))))
+fvals <- forecast(fit, level = c(80, 95, 99), h=365, xreg=cbind(fourier(kwhts, K=1, h=365), t = 1095:((1095+364))))
+
+
+
+len.x <- 1095
+len.y <- length(fvals$mean)
+
+     df <- tibble(date = seq(from = 2017, to = 2021, length.out =  1095 +length(fvals$mean)),
+                  x = c(fvals$x, rep(NA, len.y)),
+                  fitted = c(fvals$fitted, rep(NA, len.y)),
+                  forecast = c(rep(NA, len.x), fvals$mean),
+                  lo.80 = c(rep(NA, len.x), fvals$lower[, 1]),
+                  up.80 = c(rep(NA, len.x), fvals$upper[, 1]),
+                  lo.95 = c(rep(NA, len.x), fvals$lower[, 2]),
+                  up.95 = c(rep(NA, len.x), fvals$upper[, 2]),
+                  lo.99 = c(rep(NA, len.x), fvals$lower[, 3]),
+                  up.99 = c(rep(NA, len.x), fvals$upper[, 3]))
+     
+forecast_plot <- ggplot(df,  aes(date, x)) +
+          geom_line(aes(colour = "Training"), lwd = 1) +
+          #geom_line(data = df, aes(date, fitted, colour = "Fitted"), size = 0.75) +
+          #geom_ribbon(data = df, aes(date, ymin = lo.99, ymax = up.99, fill = "99%")) +
+          geom_ribbon(data = df, aes(date, ymin = lo.95, ymax = up.95, fill = "95%")) +
+          geom_ribbon(data = df, aes(date, ymin = lo.80, ymax = up.80, fill = "80%")) +
+          geom_line(data = df, aes(date, forecast, colour = "Forecast"), size = 0.75) +
+      
+          scale_colour_manual(name = "Model Data",
+                              values = c(
+                                "Training" = "darkblue",
+                                         #"Fitted" = "darkblue",
+                                         "Forecast" = "black"),
+                              breaks = c("Training", "Fitted", "Forecast")) +
+          scale_fill_manual(name = "Forecast Intervals",
+                            values = c(#"99%" = "grey", 
+                                       "95%" = "grey",
+                                       "80%" = "darkblue")) +
+          guides(colour = guide_legend(order = 1), fill = guide_legend(order = 2)) +
+          labs(title = "1-Year Forecast with Confidence Intervals",
+               #subtitle = "sub.title",
+               #caption = "caption",
+               x = "Date",
+               y = "kWh") + 
+  theme(legend.position = "bottom") + 
+  theme_minimal()
+
+suppressWarnings(print(forecast_plot))
+```
+
+
+# Conclusion
+
+In summary, our model fits the data well and makes reasonable predictions. Using this model we can answer our original research questions. First, we now understand that the total energy output of the solar panel is decreasing by about 1.7 kilowatt hours per year. Second, we predict that the solar panel will lose 50% of it's efficiency within ten years of implementation (around 2027). And third, we predicted the next year of the kWh for the solar panel.
+
+There were shortcomings in our data analysis and modeling. One of them is that we assume the decay of the model is linear. While this could be the case, it could also be the case that a more complex phenomenon is happening here. We also only had two variables, and could only analyze their relationship, whereas there might be some correlation with other important factors.
+
+Some next steps we could take would be first, like mentioned earlier, to include more covariates that would enrich our analysis and allow us to learn more about seasonal patterns. It would also be good to include more years of data in our analysis. With only three years of data, we are not very certain of our predictions when we go more than three years out. If we had more data, we could make better predictions and maybe see more patterns in the data. It would also be good to gather data from different solar panels to make our predictions more general for all solar panels. The model we have proposed today is good for that solar panel and caution should be used when making inference to other solar panels.
+
+# Teamwork
+
+Bethany worked on describing the methods and models, and model justification and performance evaluation. Nate worked on problem statement, EDA, and understanding, as well as results and cross validation. We both worked on the conclusion.
+
+
+
+```{r include = FALSE}
+# Cross Validation
+
+
+k = 30
+i = 1
+SSE <- NA
+mse <- NA
+rmse <- NA
+bias <- NA
+for(i in 1:6){
+  
+  cut.point = 547 + 30*(i -1) 
+  train = 1:cut.point
+  test = cut.point + 1:365
+  
+ 
+  
+  kwhts <- ts(kwh[train,]$kwh,
+              start = c(2017, as.numeric(format(inds[1], "%j"))),
+              frequency = 365)
+  #build model on train
+  fit <- Arima(kwhts, order=c(1,1,1), xreg=cbind(fourier(kwhts, K = 1), t = 1:length(kwhts)))
+  #test model on test
+  futurVal <- forecast(fit,level=c(95), xreg = cbind(fourier(kwhts, K = 1, h = 365),t=length(kwhts):(length(kwhts)+364)))
+  plot(futurVal)
+  SSE[i] = sum((futurVal$mean - kwh[test,]$kwh)^2)
+  mse[i] = SSE[i]/length(test)
+  rmse[i] = sqrt(mse[i])
+  bias[i] = (futurVal$mean - kwh[test,]$kwh)
+  
+
+
+}
+mean(rmse)
+mean(bias)
+
+1-sum((fit$fitted - kwhts)^2)/sum((kwhts)^2)
+```
+
+
+```{r include = FALSE}
+
+# # General linear Hypothesis test
+# inds <- seq(as.Date("2017-01-01"), as.Date("2019-12-31"), by = "day")
+# ## Create a time series object
+# kwhts <- ts(kWh$kWh,
+#             start = c(2017, as.numeric(format(inds[1], "%j"))),
+#             frequency = 365)
+# 
+# kwhts <- ts(kWh$kWh,
+#             start = c(2017, as.numeric(format(inds[1], "%j"))),
+#             frequency = 365)
+# fit <- Arima(kwhts, order=c(1,0,0), xreg=cbind(fourier(kwhts, K = 1), t = 1:1095))
+# summary(fit)
+# library(multcomp)
+# a.matrix <- matrix(data = c(0,0,0,0,365), nrow = 1)
+# length(coef(fit))
+# a.matrix
+# a.glht <- glht(fit, a.matrix)
+# summary(a.glht)
+# -1.6845-0.7896
+# mean(kwhts[1:365]) + 10*-1.6845 = mean(kwhts[1:365])/2
+```

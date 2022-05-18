@@ -1,0 +1,366 @@
+---
+title: "Credit Card Fraud Analysis"
+author:
+- Nate Hawkins
+- Matthew Morgan
+geometry: margin = 1.25cm
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+abstract: In this analysis we attempt to use modelling to predict fraudulent activity in credit card accounts. Very few accounts are fraudulent, but these few cost Americans billions of dollars every year. We used information on 300,000 accounts to model whether or not an account was fraudulent. Ater comparing many models, we determined that a random forest was the best at correctly classifying accounts. The random forest model correcltly classified the status of over 99% of accounts, and correctly classified fraudulent accounts as being fraudulent 78% of the time.
+
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(kableExtra)
+library(patchwork)
+library(pROC)
+library(purrr)
+library(tidyverse)
+```
+
+```{r}
+ccfraud <- read.csv("C:/Users/nateh/Documents/Stat 536/CCFraud.csv")
+
+# Removing the X column (Time)
+ccfraud <- ccfraud[,-1]
+
+# Removing duplicated rows
+ccfraud <- ccfraud[!duplicated(ccfraud),]
+
+ccfraud$Fraud <- ifelse(ccfraud$Class == 0, "No", "Yes") %>% as.factor()
+```
+
+
+
+```{r}
+inTrain <- createDataPartition(y = ccfraud$Class, p = .8, list = FALSE)
+training <- ccfraud[inTrain,]
+test <- ccfraud[-inTrain,]
+```
+
+# Problem Statement & Understanding
+
+Credit card fraud is a major problem in the United States. Experts estimate that fraudulent cards cost consumers 22 billion dollars every year. It is, therefore, very important to know which cards are likely fraudulent and which ones are not. Machine learnings can help us solve this problem.The easiest solution would be to flag every single account as possibly fraudulent, and investigate further. Because this solution is not practical, we need to find a model that will accurately flag fraudulent activity without flagging too many valid accounts as fraudulent. In this analysis we use a dataset containing information about 300,000 credit card accounts that have either been marked as fraudulent or not. Due to the proprietary nature of the data, we do not know what the information associated with each account is. We will use this data to make a prediction model. In this study we hope to understand how well we can accurately predict fraudulent credit activity; if a card is fraudulent, how well can we identify it as such. We will also look at 5 new accounts and use our model to determine if we think it is fraudulent or not.
+
+Below we show the number of fraudulent and valid accounts in the data set. Notice that there are much more valid accounts than fraudulent accounts.
+
+```{r}
+library(crosstable)
+crosstable(ccfraud, Fraud, percent_digits=1) %>% 
+  as_flextable(keep_id=FALSE)
+
+
+```
+
+The unbalanced nature of the data will make the modeling tricky, we will need to be very careful in choosing at which point we will mark an observation as fraudulent. The response variable is binary in nature, making this a classification problem. We will pursue classification modelling techniques. Because we do not know the names of the factors, it would be fruitless to attempt to understand the relationships between variables. There are also many likely hidden interactions between variables in the data. Due to these limitations, a logistic regression model will likely not be the best model for this project.
+
+
+
+
+
+# Model Specification
+
+```{r, warning = FALSE}
+set.seed(536)
+
+log_under <- train(
+  Fraud ~ .,
+  data = training %>% select(-Class),
+  method = "glm",
+  family = "binomial",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE, 
+    sampling = "down"
+  )
+)
+
+log_under_acc <- c(round(log_under$results["Accuracy"], 3), round(log_under$results["AccuracySD"], 3))
+```
+
+```{r}
+set.seed(536)
+
+nnet_under <- train(
+  Fraud ~ .,
+  data = training %>% select(-Class),
+  method = "nnet",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE, 
+    sampling = "down"
+  ),
+  tuneGrid = expand.grid(
+    size = 1,
+    decay = 0
+  ),
+  trace = FALSE
+)
+
+nnet_under_acc <- c(round(nnet_under$results["Accuracy"], 3), round(nnet_under$results["AccuracySD"], 3))
+```
+
+```{r}
+set.seed(536)
+
+rf_under <- train(
+  Fraud ~ .,
+  data = training %>% select(-Class),
+  method = "ranger",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE, 
+    sampling = "down"
+  ),
+  tuneGrid = expand.grid(
+    mtry = 2,
+    splitrule = "extratrees",
+    min.node.size = 1
+  ),
+  importance = "impurity",
+  num.trees = 100
+)
+
+rf_under_acc <- c(round(rf_under$results["Accuracy"], 3), round(rf_under$results["AccuracySD"], 3))
+
+```
+
+Initially, multiple models were considered for this analysis:
+
+-   Logistic Regression
+-   Neural Network
+-   Random Forest
+
+A logistic regression model was considered because it is the standard model for classification-based analysis such as this one and it is a good baseline model for comparison. The strength of the logistic regression model is its interpretability as it can quantify how variables affect the model probability estimates. Although, given that this analysis has mostly encoded variables, model interpretability is all but nullified. Additionally, the logistic regression model has explicit assumptions of linearity in the log-odds and independence that need to be checked.
+
+A neural network was considered because it is a powerful predictive model. A has no assumptions as it learns from the data given to it and therefore learns the relationships between that data. As a result of this learning, a neural network can model non-linear and more complex relationships on unseen data. One drawback to be aware of with a neural network is that it can easily overfit to the data given to it. Specifically for this analysis, overfitting would mean that the model understands the fraudulent transactions in the data set really well but does a poor job at detecting fraudulent transactions that it has not yet seen.
+
+A random forest model was considered because it is another powerful predictor model. It can also model non-linear relationships as it randomly selects a specified number of variables to make each tree. A random forest model also has no assumptions. Additionally, outliers are less of an issue for a random forest model. Although, a random forest model also has the drawback of overfitting.
+
+# Model Selection, Justification & Performance Evaluation
+
+```{r}
+acc_df <- rbind(log_under_acc, nnet_under_acc, rf_under_acc)
+```
+
+```{r}
+colnames(acc_df) <- c("Accuracy", "$\\sigma_\\text{Accuracy}$")
+row.names(acc_df) <- c("Logistic Regression", "Neural Network", "Random Forest")
+
+kable(
+  acc_df, 
+  format = "markdown", 
+  caption = "In-Sample Model Fit"
+)
+```
+
+*Table 1* looks at in-sample model fit for each of the candidate models. All the models were fit using a 10-fold cross validation procedure as the data set was large. Using this procedure allows the models to be checked for possible overfitting.
+
+Also, each of the models were fit using undersampling to address the imbalanced classes in the data set. Undersampling randomly "deletes" events in the majority class to end up with the same number of events as the minority class and a balanced sample. Specifically, there were `r nrow(training[training$Class == 1,])` fraudulent transactions in the 75% training split of the data set. As a result, `r nrow(training) - nrow(training[training$Class == 1,])` non-fraudulent transactions were "deleted" and the sample size was reduced from `r nrow(training)` to `r 2*nrow(training[training$Class == 1,])`. The hope was that with a balanced sample size, the models would better be able to identify the fraudulent transactions.
+
+Given the in-sample fit of each of the candidate models, the random forest model fit the data the best and will be used to identify and detect fraudulent transactions. 
+
+```{r}
+# Calculate a predicted probability for each point in our dataset
+rf_pred_probs <- predict(rf_under, newdata = test, type = "prob")[, "Yes"]
+
+# Creating a sequence that contains a lot of potential thresholds between 0 and 1
+thresh <- seq(from = 0, to = 1, length = 100)
+# Evaluating how well each threshold in thresh does in terms of a misclassification rate 
+misclass <- rep(NA, length = length(thresh)) #Empty vector to hold misclassification rates 
+sens <- rep(NA, length = length(thresh)) 
+ppv <- rep(NA, length = length(thresh)) 
+
+for (i in 1:length(thresh)) {
+  #If probability greater than threshold then 1 else 0
+  classification <- ifelse(rf_pred_probs > thresh[i], 1, 0)
+  # calculate the pct where my classification not eq truth
+  misclass[i] <- mean(classification != test$Class)
+  #misclass[i] <- mean(my.classification == 0 & Diabetes$diabetes == 1)
+  sens[i] <- sensitivity(data = as.factor(as.numeric(rf_pred_probs > thresh[i])), reference = as.factor(test$Class), positive = "1")
+  ppv[i] <- posPredValue(data = as.factor(as.numeric(rf_pred_probs > thresh[i])), reference = as.factor(test$Class), positive = "1")
+}
+
+#Find threshold which minimizes miclassification
+misclass_thresh <- thresh[which.min(misclass)]
+sensppv_thresh <- thresh[which.min(abs(sens - ppv))]
+
+thresh_df <- data.frame(thresh, misclass, sens, ppv)
+
+thresh_df <- thresh_df %>%
+  gather(key = "variable", value = "value", -thresh)
+
+roc <- roc(test$Class, rf_pred_probs, quiet = TRUE)
+```
+
+The breakdown of a classification-based random forest model is as follows:
+
+For $b = 1, \dots, B$
+
+-   Take a bootstrapped (with replacement) sample of size $n$
+
+-   At each split, randomly consider $m < P$ variables
+
+-   Build a tree $\tau_b$
+
+To predict for a point $x_0$
+
+-   For $b = 1, \dots, B$ pass $x_0$ down the $b^{th}$ tree to get bootstrapped probability prediction $\hat{y}^b(x_0)$
+
+-   Average predictions to get $$
+    \hat{y}(x_0) = \frac{1}{B}\sum_{b=1}^{B} \hat{y}^b(x_0)
+    $$
+
+Where
+
+-   $B$ \| `num.trees` (*100*) - total umber of trees to be built by the model
+
+-   `replacement` (*TRUE*) - parameter indicating whether bootstrap sampling is to be done with or without replacement
+
+-   $n$ \| `sample.fraction` (*1*) - size/proportion of the bootstrapped sample used to build each tree
+
+-   $m$ \| `mtry` (*2*) - the number of explanatory variables to randomly consider splitting at in a node
+
+-   $P$ (*29*) - the total number of explanatory variables in the data set
+
+-   $x_0$ - a point from the test data set which represents a single transaction
+
+-   $\hat{y}^b(x_0)$ - the bootstrapped probability prediction of $x_0$ being fraudulnt for the $b^{th}$ tree
+
+-   $\hat{y}(x_0)$ - the average bootstrapped probability prediction of $x_0$ being fraudulent
+
+-   `splitrule` (*extratrees*) - parameter that chooses the variable(s) that result in the best splits at each node by choosing cut-points fully at random
+
+-   `min.node.size` (*1*) - parameter that defines the minimum number of points from the training set required in a node to be considered for splitting.
+
+The random forest model has no assumptions that need to be justified. Also, the model was given all possible explanatory variables with the intuition that the model will inherently perform variable selection by using certain variables more than others.
+
+```{r}
+thresh_plot <- ggplot(data = thresh_df, aes(x = thresh, y = value)) + 
+  geom_line(aes(color = variable)) +
+  geom_hline(yintercept = min(misclass), lty = 2) + 
+  scale_color_manual(
+    name = "Metrics",
+    values = c("#E61744", "#1FB3D1", "#006073"),
+    labels = c("Misclassification\nRate", "PPV", "Sensitivity")
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(.4, .5)) +
+  labs(
+    title = "Random Forest Model",
+    subtitle = "Threshold Optimization",
+    x = "Threshold",
+    y = "",
+    caption = "Figure 5"
+  )
+```
+
+```{r}
+roc_plot <- ggroc(roc, colour = '#10A170', size = 2) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color = "darkgrey", linetype = "dashed") +
+  ggtitle(paste0('ROC Curve ', '(AUC = ', round(auc(roc), 4), ')')) +
+  theme_minimal() +
+  labs(
+    subtitle = "Classification across all thresholds?",
+    x = "Specificity",
+    y = "Sensitivity",
+    caption = "Figure 8"
+  )
+
+# Insanely good...
+```
+
+```{r, warning = FALSE, fig.width = 8, fig.align = 'center'}
+thresh_plot + roc_plot
+```
+
+Since the outputs from the random forest model are predicted probabilities, a threshold must be selected to classify each of the transactions as fraudulent or non-fraudulent according to their predicted probabilities. Essentially, if the predicted probability is greater than the threshold, the transaction will be classified as fraudulent.
+
+*Figure 5* shows the misclassification rate, sensitivity, and positive predictive value (PPV) across multiple thresholds. The threshold chosen for this analysis was 0.8 as it provided the best balance between sensitivity and positive predictive value.
+
+*Figure 8* shows the ROC curve for the random forest model. With an ROC of `r round(auc(roc), 4)`, the model is classifying quite well across all thresholds.
+
+# Results
+
+First we will look at how well our model did at correctly classifying fraudulent accounts. The following figure shows how well the model predicts out of sample. A perfect model would have 0's on the off-diagonals. 
+
+```{r, results = "asis"}
+conf_mat <- confusionMatrix(
+  data = as.factor(as.numeric(rf_pred_probs > .8)),
+  reference = as.factor(test$Class),
+  positive = "1"
+)
+ 
+kable(
+  conf_mat$table, 
+  format = "markdown", 
+  caption = "Confusion Matrix"
+)
+```
+
+-   *Sensitivity* - `r round(conf_mat$byClass["Sensitivity"], 3)` This means that
+    on average, `r round(conf_mat$byClass["Sensitivity"]*100, 1)`% of fraudulent transactions      were predicted to be fraudulent
+-   *Specificity* - `r round(conf_mat$byClass["Specificity"], 3)` This means that
+    on average, `r round(conf_mat$byClass["Specificity"]*100, 1)`% of non-fraudulent transactions were predicted to be non-fraudulent
+-   *Positive Predictive Value* - `r round(conf_mat$byClass["Pos Pred Value"], 3)`
+    This means on average, `r round(conf_mat$byClass["Pos Pred Value"]*100, 1)`%
+    of transactions predicted to be fraudulent were fraudulent
+-   *Negative Predictive Value* - `r round(conf_mat$byClass["Neg Pred Value"], 3)`
+    This means that on average, `r round(conf_mat$byClass["Neg Pred Value"]*100, 1)`% of transactions who were predicted to be non-fraudulent were non-fraudulent 
+
+```{r include = FALSE}
+# Get 10 most important variables
+ImpMeasure <- data.frame(varImp(rf_under)$importance)
+ImpMeasure$Vars <- row.names(ImpMeasure)
+rownames(ImpMeasure) <- NULL
+```
+
+
+Here we show which variables are thought by the model to be the most important in determining fraudulent card activity. Although these variables have no interpretability for us, the owners of the dataset may find these insightful. We include this to show that there are certainly some variables that are more important than other that the model has weighted more heavily.
+```{r}
+ggplot(data = ImpMeasure[order(-ImpMeasure$Overall), ][1:10, ], aes(reorder(Vars, Overall), Overall)) +
+  geom_col(fill = "#0062B8", col = "black") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Random Forest Variable Importance",
+    subtitle = "10 Most Important Variables",
+    caption = "Figure 2",
+    x = "Variable",
+    y = "Importance"
+  )
+```
+
+Next we want to predict the status of five new accounts. We do not know whether these were fraudulent or not, and must use the model to determine whether or not to flag them as such. *New Accounts* shows each account and it's probability of being fraudulent. Only account 3 has a probability of being fraudulent greater than 0.8, so this one is flagged as such.
+
+```{r, results='asis'}
+fraud_detect <- read.csv("C:/Users/nateh/Documents/Stat 536/IsFraudulent.csv")
+
+rf_fraud_probs <- predict(rf_under, newdata = fraud_detect, type = "prob")[, "Yes"]
+
+df_fraud = data.frame("Account Number" = c(1:5), "Fraud Probability" = c(rf_fraud_probs), "Fraudulent?" = c("No", "No", "Yes", "No", "No"))
+kable(
+  col.names = c("Account Number", "Fraud Probability", "Fraudulent?"),
+  df_fraud, 
+  format = "markdown", 
+  caption = "New Accounts", 
+  align=c(rep('c',times=3))
+)
+```
+
+
+
+# Conclusion
+
+In this analysis we built multiple models to predict the validity of a credit card account. After comparing these models, we determined that a random forest model would be best for these data. We were able to predict, with 99.9% accuracy whether or not an account was fraudulent. Because the cost of not flagging a fraudulent account is higher than incorrectly flagging a valid account, we paid special attention to making sure we flagged as many fraudulent accounts as possible. This resulted in a model with an out-of-sample sensitivity of `r round(conf_mat$byClass["Sensitivity"], 3)`. This means that given an account was fraudulent, we correctly predicted so `r round(conf_mat$byClass["Sensitivity"]*100, 1)`% of the time. Furthermore, this model incorrectly flagged a non-fraudulent account as being fraudulent less than 1% of the time. One shortcoming of this model is non-interpretability. Even if we knew what the variables were, we wouldn't know whether they increased or decreased probability of being fraudulent. If we knew what the variables were, a logistic regression model may be preferred for its interpretability. In future studies we would propose limiting classifying "fraudulent" accounts as only the accounts that actually cost the company money. Perhaps we could classify the accounts that only lost a dollar or two as "valid". This could possibly increase the predictive power of the model without losing the company money.
+

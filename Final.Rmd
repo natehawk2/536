@@ -1,0 +1,407 @@
+---
+title: "Oregon Health Insurance Experiment"
+author: "Nathan Hawkins"
+date: "12/9/2021"
+output: html_document
+---
+
+
+
+
+```{r}
+library(tidyverse)
+library(e1071)
+library(bestglm)
+library(beepr)
+library(corrplot)
+library(pROC)
+library(crosstable)
+library(car)
+library(ggthemes)
+ore <- read.csv("oregon.csv")
+head(ore)
+names(ore)
+
+set.seed(536)
+```
+
+
+
+```{r}
+
+
+
+ggplot(data = ore, mapping = aes(y = (income), x = as.factor(enrolled))) + 
+  geom_boxplot(fill = "dodgerblue1") + 
+  labs(title = "Enrolled by log(Income)", 
+       x = "Enrolled", 
+       y = "log(Income)"
+       ) + 
+  ggthemes::theme_stata()
+
+```
+
+```{r}
+hist(ore$income)
+ore <- read.csv("oregon.csv")
+ore$income <- log(ore$income + 1)
+
+samp = sample(1:nrow(ore), round(nrow(ore)*0.8))
+train = ore[samp,]
+test = ore[-samp,]
+```
+
+
+
+
+```{r}
+logistic1 <- glm(enrolled ~ ., data = train, family = binomial(link = "logit"))
+summary(logistic1)
+
+
+auc(train$enrolled, logistic1$fitted.values)
+auc(test$enrolled, predict.glm(logistic1, test, type = "response"))
+
+
+vif(logistic1)
+plot(logistic1)
+
+avPlot(logistic1, "income")
+avPlot(logistic1, "age")
+
+confints = confint(logistic1)
+confints[,1]
+
+coef.df <- data.frame("Effect" = round((exp(logistic1$coef)-1)*100, 1),
+                      "Lower 95% CI" = round((exp(confints[,1])-1)*100, 1),
+                      "Upper 95% CI" = round((exp(confints[,2])-1)*100, 1),
+                      "P-value" = round(summary(logistic1)$coefficients[,4], 3))
+coef.df
+knitr::kable(coef.df)
+#write.csv(coef.df, "Coefficients_estimate.csv")
+```
+
+
+
+
+
+```{r}
+library(caret)
+library(pROC)
+# Calculate a predicted probability for each point in our dataset
+logistic_probs <- predict.glm(logistic1, newdata = test, type = "response")
+
+# Creating a sequence that contains a lot of potential thresholds between 0 and 1
+thresh <- seq(from = 0, to = 1, length = 1000)
+# Evaluating how well each threshold in thresh does in terms of a misclassification rate 
+misclass <- rep(NA, length = length(thresh)) #Empty vector to hold misclassification rates 
+sens <- rep(NA, length = length(thresh)) 
+ppv <- rep(NA, length = length(thresh)) 
+
+for (i in 1:length(thresh)) {
+  #If probability greater than threshold then 1 else 0
+  classification <- ifelse(logistic_probs > thresh[i], 1, 0)
+  # calculate the pct where my classification not eq truth
+  misclass[i] <- mean(classification != test$enrolled)
+  #misclass[i] <- mean(my.classification == 0 & Diabetes$diabetes == 1)
+  sens[i] <- sensitivity(data = as.factor(as.numeric(logistic_probs > thresh[i])), reference = as.factor(test$enrolled), positive = "1")
+  ppv[i] <- posPredValue(data = as.factor(as.numeric(logistic_probs > thresh[i])), reference = as.factor(test$enrolled), positive = "1")
+}
+
+#Find threshold which minimizes miclassification
+misclass_thresh <- thresh[which.min(misclass)]
+sensppv_thresh <- thresh[which.min(abs(sens - ppv))]
+
+thresh_df <- data.frame(thresh, misclass, sens, ppv)
+
+thresh_df <- thresh_df %>%
+  gather(key = "variable", value = "value", -thresh)
+
+roc <- roc(test$enrolled, logistic_probs, quiet = TRUE)
+
+thresh_plot <- ggplot(data = thresh_df, aes(x = thresh, y = value)) + 
+  geom_line(aes(color = variable)) +
+  geom_hline(yintercept = min(misclass), lty = 2) + 
+  geom_vline(xintercept = 0.421, lty = 3)+ 
+  scale_color_manual(
+    name = "Metrics",
+    values = c("#E61744", "#1FB3D1", "#006073"),
+    labels = c("Misclassification\nRate", "PPV", "Sensitivity")
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(0.9, 0.6)) +
+  labs(
+    title = "Logistic Regression Model",
+    subtitle = "Threshold Optimization",
+    x = "Threshold",
+    y = "",
+    caption = "Figure 1"
+  )
+
+thresh_plot
+
+
+which.min(abs(sens[1:800]-ppv[1:800]))
+thresh[383]
+glm.preds = predict.glm(logistic1, test, type = "response")
+response = ifelse(glm.preds > 0.421, 1, 0)
+
+
+
+confusionMatrix(data = as.factor(test$enrolled), reference = as.factor(response))
+```
+
+```{r}
+ore <- read.csv("oregon.csv")
+head(ore)
+ore$income <- log(ore$income + 1)
+ore$enrolled <- ifelse(ore$enrolled == 1, "y", "n")
+samp = sample(1:nrow(ore), round(nrow(ore)*0.8))
+train = ore[samp,]
+test = ore[-samp,]
+```
+
+# Machine learning models
+
+```{r include = FALSE}
+
+
+rf <- train(
+  as.factor(enrolled) ~ .,
+  data = train,
+  method = "ranger",
+  metric = "Accuracy",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE
+  ),
+  tuneGrid = expand.grid(
+    mtry = 4,
+    splitrule = "extratrees",
+    min.node.size = 1
+  ),
+  importance = "impurity",
+  num.trees = 50
+)
+
+rf_results <- c(round(rf$results["Accuracy"], 3), round(rf$results["AccuracySD"], 3))
+
+
+#predict(rf, train, type = "prob")$y
+auc(train$enrolled, predict(rf, train, type = "prob")$y)
+auc(test$enrolled, predict(rf, test, type = "prob")$y)
+
+confusionMatrix(data = predict(rf, train), reference = as.factor(train$enrolled))
+confusionMatrix(data = predict(rf, test), reference = as.factor(test$enrolled))
+
+```
+
+
+```{r include = FALSE}
+nnet <- train(
+  enrolled ~ .,
+  data = train,
+  method = "nnet",
+  metric = "Accuracy",
+  trControl = trainControl(
+    method = "cv", 
+    number = 2, 
+    classProbs = TRUE 
+  ),
+  tuneGrid = expand.grid(
+    size = 3,
+    decay = 0
+  ),
+  trace = TRUE
+)
+
+nnet_results <- c(round(nnet$results["Accuracy"], 3), round(nnet$results["AccuracySD"], 3))
+nnet_results
+auc(train$enrolled, nnet$finalModel$fitted.values)
+
+confusionMatrix(data = predict(nnet, train), reference = as.factor(train$enrolled))
+confusionMatrix(data = predict(nnet, test), reference = as.factor(test$enrolled))
+
+```
+
+```{r}
+library(e1071)
+svmRadial = e1071::svm(formula = as.factor(enrolled) ~ . , data = train, kernel = "radial", type = "C-classification")
+svmR.preds = predict(svmRadial, train, type = "prob")
+mean(train$enrolled == svmR.preds)
+```
+
+
+```{r include = FALSE}
+bag <- train(
+  enrolled ~ .,
+  data = train,
+  method = "treebag", nbagg = 10,
+  metric = "Accuracy",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE 
+  )
+)
+
+bag_results <- c(round(bag$results["Accuracy"], 3), round(bag$results["AccuracySD"], 3))
+bag_results
+bag.preds = predict(bag, train, type = "prob")
+auc(train$enrolled, bag.preds$y)
+
+bag.preds = predict(bag, test, type = "prob")
+auc(test$enrolled, bag.preds$y)
+
+```
+
+
+```{r}
+# qda <- train(
+#   enrolled ~ .,
+#   data = train,
+#   method = "qda",
+#   metric = "Accuracy",
+#   trControl = trainControl(
+#     method = "cv", 
+#     number = 10, 
+#     classProbs = TRUE 
+#   )
+# )
+# 
+# qda_results <- c(round(qda$results["Accuracy"], 3), round(qda$results["AccuracySD"], 3))
+# qda_results
+# auc(train$enrolled, predict(qda$finalModel, train, type = "prob"))
+```
+
+
+```{r}
+# lda <- train(
+#   enrolled ~ .,
+#   data = train,
+#   method = "lda",
+#   metric = "Accuracy",
+#   trControl = trainControl(
+#     method = "cv", 
+#     number = 10, 
+#     classProbs = TRUE 
+#   )
+# )
+# 
+# lda_results <- c(round(lda$results["Accuracy"], 3), round(lda$results["AccuracySD"], 3))
+# lda_results
+```
+
+```{r}
+gbm <- train(
+  enrolled ~ .,
+  data = train,
+  method = "gbm",
+  metric = "Accuracy",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE 
+  ), 
+  tuneGrid = data.frame(interaction.depth = 10,
+                                      n.trees = 200,
+                                      shrinkage = .1, 
+                                      n.minobsinnode = 1)
+)
+
+gbm_results <- c(round(gbm$results["Accuracy"], 3), round(gbm$results["AccuracySD"], 3))
+
+
+auc(train$enrolled, predict(gbm, train, type = "prob")$y)
+auc(test$enrolled, predict(gbm, test, type = "prob")$y)
+
+confusionMatrix(data = predict(gbm, train), reference = as.factor(train$enrolled))
+confusionMatrix(data = predict(gbm, test), reference = as.factor(test$enrolled))
+
+```
+
+```{r}
+logistic <- train(
+  enrolled ~ .,
+  data = train,
+  method = 'glmnet',
+  family = "binomial",
+  metric = "Accuracy",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE 
+  )
+)
+
+logistic_results <- c(round(logistic$results["Accuracy"], 3), round(logistic$results["AccuracySD"], 3))
+logistic_results
+
+auc(train$enrolled, predict(logistic, train, type = "prob")$y)
+auc(test$enrolled, predict(logistic, test, type = "prob")$y)
+
+confusionMatrix(data = predict(logistic, train), reference = as.factor(train$enrolled))
+confusionMatrix(data = predict(logistic, test), reference = as.factor(test$enrolled))
+
+```
+
+
+```{r}
+# svmR <- train(
+#   enrolled ~ .,
+#   data = train,
+#   method = "svmRadial",
+#   metric = "Accuracy",
+#   trControl = trainControl(
+#     method = "cv", 
+#     number = 10, 
+#     classProbs = TRUE 
+#   )
+# )
+# beep(2)
+# svmR_results <- c(round(svmR$results["Accuracy"], 3), round(svmR$results["AccuracySD"], 3))
+# svmR_results
+# 
+# auc(test$enrolled, predict(svmR, test, type = "prob")$y)
+```
+```{r}
+# svmP <- train(
+#   enrolled ~ .,
+#   data = train,
+#   method = "svmPoly",
+#   metric = "Accuracy",
+#   trControl = trainControl(
+#     method = "cv", 
+#     number = 2, 
+#     classProbs = TRUE 
+#   )
+# )
+# beep(2)
+# svmP_results <- c(round(svmP$results["Accuracy"], 3), round(svmP$results["AccuracySD"], 3))
+# svmP_results
+# 
+# auc(test$enrolled, predict(svmP, test, type = "prob")$y)
+
+```
+
+
+```{r}
+knn.grid = expand.grid(.k = c(3,5,10,15,20,25, 50))
+
+knn.fit <- train(enrolled~., data = train,
+                 method = "knn",
+                 metric = "Accuracy", 
+                 tuneGrid = knn.grid,
+                 trControl = trainControl(
+                   method = "cv", 
+                   number = 5, 
+                   classProbs = TRUE))
+
+knn_results <- c(round(knn.fit$results["Accuracy"], 3), round(knn.fit$results["AccuracySD"], 3))
+knn_results
+
+auc(train$enrolled, predict(knn.fit, train, type = "prob")$y)
+```
+
+

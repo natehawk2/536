@@ -1,0 +1,196 @@
+---
+title: "KWH TimeSerires"
+author: "Nathan Hawkins"
+date: "10/22/2021"
+output: html_document
+---
+
+# Introduction
+
+Solar power is an environmentally-friendly alternative to other forms of energy. In recent years, many home-owners have invested in installing solar panels to be placed on their homes. We are interested in how much energy a solar panel can generate, as measured in kilo-watt hours (kwh). Understanding energy output over time could help companies in making better solar panels, consumers wanting to understand how much energy they will get, or scientists wanting to understand the future of energy generation. In this analysis we seek to 1) understand how energy output of the panels change over time, 2) estimate when a panel will lose 50% of its efficiency, and 3) forecast for one year the energy output for a solar panel. To do this analysis we have a data set with the daily energy output of a solar panel. The kwh for this panel was measured once a day for three years as shown below.
+
+```{r include = FALSE}
+kwh <- read.csv("kwh.csv")
+library(astsa)
+library(ggplot2)
+library(lubridate)
+kwh$Date <- as.Date(kwh$Date)
+kwh_plot <- ggplot(data = kwh, mapping = aes(x = Date, y = kwh)) + 
+  geom_line(color = "darkblue", lwd = 1) + 
+  geom_smooth(color = "darkgrey", lwd = 2, se = FALSE, method = 'gam', formula = 'y ~ s(x, bs = "cs")') + 
+  labs(title = "Solar Panel Output", x = "") + 
+  theme_minimal()
+
+suppressWarnings(print(kwh_plot))
+
+
+```
+
+Notice that there are definitely some months that are higher (summer) or lower (winter) than others. We can also see that the kilo-watt hours are likely decreasing on average each year. These will be important things to consider when constructing our model. We can also see that the data are very temporally correlated (knowing what happened yesterday or last year helps me know what today's output will be). Choosing a model that did not account for these correlations would result in an inaccurate/imprecise model. There is a lot of predictive power that is gained by accounting for the relatedness of the outputs on different days. For example, if last December 5th didn't result in much kwh, we are fairly certain that this year's December 5th will also be low.
+
+# Model
+
+```{r include= FALSE}
+
+
+pacf(k$kwh)
+
+acf(k$kwh)
+
+
+acf2(k$kwh)
+
+
+inds <- seq(as.Date("2017-01-01"), as.Date("2019-12-31"), by = "day")
+## Create a time series object
+kwhts <- ts(kwh$kwh,
+            start = c(2017, as.numeric(format(inds[1], "%j"))),
+            frequency = 365)
+
+kwhts <- ts(kwh$kwh,
+            start = c(2017, as.numeric(format(inds[1], "%j"))),
+            frequency = 365)
+fit <- Arima(kwhts, order=c(1,0,0), xreg=cbind(fourier(kwhts, K = 1), t = 1:1095))
+
+summary(fit)
+sum((fit$fitted - kwh$kwh)^2)/nrow(kwh)
+
+
+## Forecast forward 1 year
+plot(forecast(fit, h=365, xreg=cbind(fourier(kwhts, K=1, h=365), t = 1095:((1095+364)))))
+
+fit$coef[5]*365
+
+
+
+```
+
+
+
+
+
+
+
+```{r include = FALSE}
+# Cross Validation
+
+
+k = 30
+i = 1
+SSE <- NA
+mse <- NA
+rmse <- NA
+bias <- NA
+for(i in 1:6){
+  
+  cut.point = 547 + 30*(i -1) 
+  train = 1:cut.point
+  test = cut.point + 1:365
+  
+ 
+  
+  kwhts <- ts(kwh[train,]$kwh,
+              start = c(2017, as.numeric(format(inds[1], "%j"))),
+              frequency = 365)
+  #build model on train
+  fit <- Arima(kwhts, order=c(1,1,1), xreg=cbind(fourier(kwhts, K = 1), t = 1:length(kwhts)))
+  #test model on test
+  futurVal <- forecast(fit,level=c(95), xreg = cbind(fourier(kwhts, K = 1, h = 365),t=length(kwhts):(length(kwhts)+364)))
+  plot(futurVal)
+  SSE[i] = sum((futurVal$mean - kwh[test,]$kwh)^2)
+  mse[i] = SSE[i]/length(test)
+  rmse[i] = sqrt(mse[i])
+  bias[i] = (futurVal$mean - kwh[test,]$kwh)
+  
+
+
+}
+mean(rmse)
+mean(bias)
+
+
+```
+
+```{r}
+# RMSE/R^2 Comparison
+table <- data.frame("Method" = c("Arima(1,0,0)", "Arima(1,1,0)", "Arima(1,1,1)"), "RMSE" = c(7.88, 15.7, 7.87), "Bias" = c(-1.81, -1.29, -1.84))
+knitr::kable(table, caption = "Cross-validated model summaries")
+```
+
+# Analysis and Results
+
+First we seek to know how energy outputs change over time. Our model estimates that the effect for an extra day is -0.0046. This means that holding all else constant we expect the kwh to go down my 0.0046 from one day to the next. Using a general linear hypothesis test, we find that from one year to the next we expect the output to go down by about -1.679 or between -0.8949 and -2.4741 with 95% confidence. We expect this trend to continue linearly for the future. Assuming that this trend will continue, after ten years we would expect the average yearly energy output to go from 33.75 to about 16.5, or roughly half of the original output. Therefore we estimate the half life of the solar panel to be about ten years. Finally, we predict the energy output for every day in the next year. Observe that the seasonal trend is continued along with a slight decrease in kwh outputs in general.
+
+```{r echo = FALSE}
+plot(forecast(fit, h=365, xreg=cbind(fourier(kwhts, K=1, h=365), t = 1095:((1095+364)))))
+fvals <- forecast(fit, level = c(80, 95, 99), h=365, xreg=cbind(fourier(kwhts, K=1, h=365), t = 1095:((1095+364))))
+
+
+
+len.x <- 1095
+len.y <- length(fvals$mean)
+
+     df <- tibble(date = seq(from = 2017, to = 2021, length.out =  1095 +length(fvals$mean)),
+                  x = c(fvals$x, rep(NA, len.y)),
+                  fitted = c(fvals$fitted, rep(NA, len.y)),
+                  forecast = c(rep(NA, len.x), fvals$mean),
+                  lo.80 = c(rep(NA, len.x), fvals$lower[, 1]),
+                  up.80 = c(rep(NA, len.x), fvals$upper[, 1]),
+                  lo.95 = c(rep(NA, len.x), fvals$lower[, 2]),
+                  up.95 = c(rep(NA, len.x), fvals$upper[, 2]),
+                  lo.99 = c(rep(NA, len.x), fvals$lower[, 3]),
+                  up.99 = c(rep(NA, len.x), fvals$upper[, 3]))
+     
+forecast_plot <- ggplot(df,  aes(date, x)) +
+          geom_line(aes(colour = "Training"), lwd = 1) +
+          #geom_line(data = df, aes(date, fitted, colour = "Fitted"), size = 0.75) +
+          #geom_ribbon(data = df, aes(date, ymin = lo.99, ymax = up.99, fill = "99%")) +
+          geom_ribbon(data = df, aes(date, ymin = lo.95, ymax = up.95, fill = "95%")) +
+          geom_ribbon(data = df, aes(date, ymin = lo.80, ymax = up.80, fill = "80%")) +
+          geom_line(data = df, aes(date, forecast, colour = "Forecast"), size = 0.75) +
+      
+          scale_colour_manual(name = "Model Data",
+                              values = c(
+                                "Training" = "darkblue",
+                                         #"Fitted" = "darkblue",
+                                         "Forecast" = "black"),
+                              breaks = c("Training", "Fitted", "Forecast")) +
+          scale_fill_manual(name = "Forecast Intervals",
+                            values = c(#"99%" = "grey", 
+                                       "95%" = "grey",
+                                       "80%" = "darkblue")) +
+          guides(colour = guide_legend(order = 1), fill = guide_legend(order = 2)) +
+          labs(title = "1-Year Forecast with Confidence Intervals",
+               #subtitle = "sub.title",
+               #caption = "caption",
+               x = "Date",
+               y = "KWH")
+
+suppressWarnings(print(forecast_plot))
+```
+
+
+```{r}
+inds <- seq(as.Date("2017-01-01"), as.Date("2019-12-31"), by = "day")
+## Create a time series object
+kwhts <- ts(kwh$kwh,
+            start = c(2017, as.numeric(format(inds[1], "%j"))),
+            frequency = 365)
+
+kwhts <- ts(kwh$kwh,
+            start = c(2017, as.numeric(format(inds[1], "%j"))),
+            frequency = 365)
+fit <- Arima(kwhts, order=c(1,0,0), xreg=cbind(fourier(kwhts, K = 1), t = 1:1095))
+summary(fit)
+library(multcomp)
+a.matrix <- matrix(data = c(0,0,0,0,365), nrow = 1)
+length(coef(fit))
+a.matrix
+a.glht <- glht(fit, a.matrix)
+summary(a.glht)
+-1.6845-0.7896
+mean(kwhts[1:365]) + 10*-1.6845 = mean(kwhts[1:365])/2
+```
+
+
+

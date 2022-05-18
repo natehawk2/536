@@ -1,0 +1,573 @@
+---
+title: "Elementary Education"
+author: "Max Smith and Nate Hawkins"
+date: "10/8/2021"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+editor_options:
+  chunk_output_type: console
+abstract: Early elementary education has been show to be of the most important years
+  in the education of children. Research has shown that learning gains for children
+  in grades K-2 are significantly greater than in other years of school. Understanding
+  what leads to more success in the education of students in these grades is very
+  important. In fitting the data to a nueral net and a bagging model, we observed
+  the variables that contribute the most to changes in standardized test scores. We
+  found that as Income, meaning the budget for extra curricular activities, goes up
+  the Scores go up also. Increasing the income would increase Scores. We also observed
+  that it is unlikely that English as a second language slows learning. In comparing
+  the neural net and the bagging model the bagging model predicted better.
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r Load Packages}
+library(tidyverse)
+# library(tensorflow)
+# library(keras)
+# library(tfdatasets)
+# library(ggplot2)
+```
+
+```{r Read in Data}
+# data <- read_table2("data/SchoolResults.txt")
+school = read.csv("school.txt", sep = " ")
+
+```
+
+```{r EDA}
+range <- range(school$Score)
+# summary(data)
+# nrow(data)
+```
+
+
+## Exploratory Data Analysis
+
+The variable Score in our data is an average cumulative score on the Stanford 9 standardized test which is out of 1600 (herafter referred to simply as "Score"). The data contains schools with Score from `r range[1] %>% round(2)` to `r range[2] %>% round(2)`. In Figure 1 we see a histogram of the Score values. This helps us to understand the distribution of Scores. The data looks normally distributed. Looking at our explanatory variables we see some collinearity. For example in our data we have Lunch and Income which has a negative correlation with -0.68. This tells us that we either need to preform variable selection or we need to use a model that is robust to collinear data. In our case we are planning to use a model that is able to handle collinear explanatory variables.
+
+```{r Metric Histogram}
+ggplot(school, mapping = aes(Score)) +
+  geom_histogram(bins = 30, fill = 'navy') +
+  labs(x = 'Score', 
+       y = 'Count', 
+       title = 'Histogram of Metric (response variable)',
+       caption = "Figure 1") +
+  theme(text = element_text(size = 14),
+        plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r include = FALSE}
+library(car)
+school = read.csv("school.txt", sep = " ")
+head(school)
+school$Income = log(school$Income)
+```
+
+```{r echo = FALSE, fig.height = 4}
+library(corrplot)
+#corrplot(cor(school), method = "number")
+
+library(ggplot2)
+ggplot(data = school, mapping = aes(x = log(Income), y = Score)) + 
+  geom_point() + 
+  labs("Scatterplot of log(Income) and Score")
+
+
+
+```
+
+
+```{r include = FALSE}
+
+library(bestglm)
+bestglm(school[,c(2:7, 1)], IC = "AIC", method = "exhaustive")
+
+
+model <- Score~.
+fit <- lm(model, school)
+test <- olsrr::ols_step_all_possible(fit)
+#View(test)
+
+
+
+#This is the best model
+school.lm <- lm(Score~ Lunch + Computer + English + log(Income), data = school)
+summary(school.lm)
+```
+
+
+# Modeling and Methods
+
+In order to  answer our questions of interest, we attempt multiple different modeling techniques. We attempt a linear model, bagging, boosting, random forest, and neural network. For the bagging boosting and random forest models we found the optimal number of trees to get the lowest out-of-sample root mean squared error. To find the best neural network we optimized the number of nodes and layers on root mean squared error. The best linear model was selected based on AIC. The following table compares out-of-sample RMSE and R squared values for the five models.
+
+```{r echo = FALSE}
+# RMSE/R^2 Comparison
+table <- data.frame("Method" = c("Linear Model", "Bagging (160)", "Random Forest (50)", "Boosting (100)"), "R Squared" = c(0.791, 0.766, 0.751, 0.733), "RMSE" = c(18.6, 19.2, 20.2, 20.9))
+knitr::kable(table)
+```
+
+We can see that the linear model has both the best R squared and the best RMSE. However all of the models are very similar given the scale of the data. The linear model both predicts the best and has the greatest interpretability. A disadvantage of the bagging, random forest, boosting, and neural networks is that it is difficult to understand what effect the variables have on the response variable. Since performance is almost the same across models, we select the one that is most interpretable: linear model.
+
+Model: $y_i$ = $\beta_0$ + $\beta_1$$x_{i1}$ +  $\beta_2$$x_{i2}$ + $\beta_3$$x_{i3}$ + $\beta_4$$x_{i4}$ + $\epsilon_i$ or
+
+$y_i$ = $\beta_0$ + $\beta_1$Lunch +  $\beta_2$Computer +  $\beta_3$English + $\beta_4$Income + $\epsilon_i$
+
+$\epsilon \sim \mathcal{N}(\mu,\,\sigma^{2})$
+
+$\beta_0$: The test score of a school with no computers, no students qualifying for reduced-price lunch, no income, and no students learning English.
+
+$\beta_1$: This is the effect that increase by one percent in reduced-lunch students has on the price of test scores holding all else constant
+
+$\beta_2$: This is the effect that an increase of 1 computer has on the test scores holding all else constant
+
+$\beta_3$: The effect of a 1 percent increase in ESL students has on test scores holding all else constant
+
+$\beta_{4}$ The effect of a log(1000 dollar) increase in District average income on test scores holding all else equal.
+
+
+
+$x_{i1}$: Percentage of students qualifying for reduced-price lunch
+
+$x_{i2}$: Number of computers
+
+$x_{i3}$: Percentage of ESL students
+
+$x_{i4$: The natural log of District Average Income
+
+
+In order to use this linear model, we check assumptions of linearity, independence, normality, and equal variance.
+
+The following added variable plots show linearity.
+
+```{r, echo = FALSE, fig.height=4}
+par(mfrow = c(1,4))
+par(mar = c(3,2,4,0.5))
+p1 <- avPlot(school.lm, variable = "log(Income)", main = "log(Income)")
+p2 <- avPlot(school.lm, variable = "Lunch", main = "Lunch")
+p3 <- avPlot(school.lm, variable = "Computer", main = "Computer")
+p4 <- avPlot(school.lm, variable = "English", main = "English")
+
+```
+
+
+Because the data were collected independently and there seems to be no relationships between observation schools, we assume independence.
+
+Next we check for normality. This is done by looking at a histogram of residuals. Since the histogram looks normal, our normality assumption is met.
+```{r echo = FALSE, fig.height=4}
+
+ggplot(mapping = aes(x = school.lm$residuals)) + 
+  geom_histogram(bins = 15)+
+  labs(title = "Histogram of Residuals", 
+       x="",
+       y = "")
+
+```
+
+
+Finally we check our equal variance assumption by looking at a scatterplot of fitted values vs residuals. Because there are no trends or patterns in the data, we assume equal variance. 
+
+```{r echo = FALSE, fig.height=4}
+
+ggplot(mapping = aes(y = school.lm$residuals, x = school.lm$fitted.values)) + 
+  geom_point() + 
+  labs(title = "Scatterplot of fitted vs residuals", 
+       y = "Residuals", 
+       x = "Fitted Values")
+```
+
+
+Since all of our assumptions are met, we can proceed with the analysis.
+
+# Model Justification and Performance Evaluations
+
+We included Lunch, Computer, English, and log(Income) in our model because after running all combinations of variables, this one produced the best AIC. We note that this also produced the highest R squared and lowest RMSE among all combinations. 
+
+The following table shows the estimated effects and uncertainties of the model variables.
+
+```{r echo = FALSE}
+table <- cbind(school.lm$coefficients,confint(school.lm))
+table <- round(table[,1:3],3)
+knitr::kable(table, col.names = c("Estimate", "Lower CI", "Upper CI"), caption = "Variable Estimates")
+
+```
+
+The model fits the data very well; the R squared is 0.791. This means that about 79 percent of the variance can be explained by the variables in our model. The model also does very well at predicting out of sample. With an RMSE of about 18, our predictions are of by about 18 points on average. This is very good considering that the standard deviation for the Scores on the Stanford 9 test is 41. This means we are about twice as good at predicting as the average score. We are also happy to report a bias of 0.06. This means that we essentially have no systematic bias in our model.
+
+```{r, include = FALSE}
+K = 5
+possibilities = 1:nrow(school)
+this.many = round(nrow(school)/K)
+splits <- list()
+already.used <- NA
+for(i in 2:K){
+  samp <- sample(possibilities, this.many, replace = FALSE)
+  splits[[i]] <- samp
+  possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+}
+splits[[1]] = possibilities
+
+# Cross validation
+library(magrittr)
+mydataset <- school
+n <- round(nrow(mydataset),0)
+n.cv <- 5 #Number of CV studies to run
+rpmse <- rep(x=NA, times=n.cv)
+bias <- rep(x=NA, times=n.cv)
+wid <- rep(x=NA, times=n.cv)
+cvg <- rep(x=NA, times=n.cv)
+for(cv in 1:n.cv){
+  
+  ## Split into test and training sets
+  train.data = school[-splits[[cv]],]
+  test.data = school[splits[[cv]], ]
+  
+  ## Fit a lm() using the training data
+  train.lm <- lm(Score~ Lunch + Computer + English + log(Income), data = train.data)
+  
+  ## Generate predictions for the test set
+  my.preds <- predict.lm(train.lm, newdata=test.data, interval="prediction")
+  
+  ## Calculate bias
+  bias[cv] <- mean(my.preds[,'fit']-test.data[['Score']])
+  
+  ## Calculate RPMSE
+  rpmse[cv] <- (test.data[['Score']]-my.preds[,'fit'])^2 %>% mean() %>% sqrt()
+  
+  ## Calculate Coverage
+  cvg[cv] <- ((test.data[['Score']] > my.preds[,'lwr']) & (test.data[['Score']] < my.preds[,'upr'])) %>% mean()
+  
+  ## Calculate Width
+  wid[cv] <- (my.preds[,'upr'] - my.preds[,'lwr']) %>% mean()
+  
+}
+hist(rpmse)
+mean(rpmse)
+mean(bias)
+hist(bias)
+mean(bias)
+hist(cvg)
+mean(cvg)
+hist(wid)
+mean(wid)
+sd(school$Score)
+summary(school.lm)
+```
+
+
+
+```{r include = FALSE}
+table <- cbind(school.lm$coefficients,confint(school.lm))
+table <- round(table[,1:3],2)
+knitr::kable(table, col.names = c("Estimate", "Lower CI", "Upper CI"), caption = "Variable Estimates")
+
+
+# RMSE/R^2 Comparison
+table <- data.frame("Method" = c("Linear Model", "Bagging (160)", "Random Forest (50)", "Boosting (100)"), "R Squared" = c(0.765, 0.766, 0.751, 0.733), "RMSE" = c(19.6, 19.2, 20.2, 20.9))
+knitr::kable(table)
+```
+
+
+
+
+
+
+```{r include = FALSE}
+# Bagging model with 160 trees is dang good
+
+#  mse is 19.22
+
+library(ranger)
+num_trees <- seq(1,500, length.out = 100)
+bag.pred.error <- c()
+bag.r.sqr <- c()
+SumE <- 0
+
+### Identify test sets
+K = 5
+possibilities = 1:nrow(school)
+this.many = round(nrow(school)/K)
+
+
+
+splits <- list()
+already.used <- NA
+for(i in 2:K){
+  samp <- sample(possibilities, this.many, replace = FALSE)
+  splits[[i]] <- samp
+  possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+}
+splits[[1]] = possibilities
+
+sqrt(mean(bag.pred.error))
+mean(bag.r.sqr)
+which.min(bag.pred.error)
+min(bag.pred.error)
+
+bag <- ranger(Score~.,data=school, num.trees = num_trees[32], mtry = ncol(school) - 1, importance = "permutation") 
+
+library(vip)
+library(ggplot2)
+vip(bag)
+```
+
+```{r include = FALSE}
+forest <- bag
+item <- importance(forest)
+library(dplyr)
+var.data <- tibble("var" = names(item), "importance" = unname(item)) %>%
+  arrange(desc(importance))
+var.data$var <- reorder(var.data$var, -var.data$importance)
+```
+
+```{r echo = FALSE}
+ggplot(var.data[1:6,], aes(var, importance)) +
+  geom_bar(stat = "identity", fill = "navy") +
+  theme(axis.text.x=element_text(angle=45,hjust=0.65,vjust=0.5)) +
+  xlab("") +
+  ylab("Variable Importance") +
+  labs(caption = "Figure 3") +
+  ggtitle('Bagging Model Variable Importance') +
+  theme(text = element_text(size = 14),
+        plot.title = element_text(hjust = 0.5))
+```
+
+```{r inclue = FALSE}
+
+#RF
+
+
+library(ranger)
+num_trees <- seq(1,500, length.out = 100)
+bag.pred.error <- c()
+bag.r.sqr <- c()
+for(i in 1:5){
+  bag <- ranger(Score~.,data=school,num.trees = 47, mtry = 2, importance = "permutation") 
+  bag.pred.error[i] <- bag$prediction.error
+  bag.r.sqr[i] <- bag$r.squared
+}
+
+mean(bag.r.sqr)
+which.min(bag.pred.error)
+sqrt(min(bag.pred.error))
+
+
+```
+
+#boosting
+
+```{r include = FALSE}
+library(gbm)
+library(magrittr)
+### Identify test sets
+K = 5
+possibilities = 1:nrow(school)
+this.many = round(nrow(school)/K)
+
+
+
+splits <- list()
+already.used <- NA
+for(i in 2:K){
+  samp <- sample(possibilities, this.many, replace = FALSE)
+  splits[[i]] <- samp
+  possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+}
+splits[[1]] = possibilities
+
+
+SSE <-SumE <- 0
+oob.mse.gbm <- NA
+boost.rsq <- NA
+for(i in 1:5){
+  train.data = school[-splits[[i]],]
+  test.data = school[splits[[i]], ]
+  
+  gbm1 <- gbm(Score~.,data=train.data, distribution = "gaussian", n.trees = 100, interaction.depth = 4, shrinkage = 0.1)  
+  p = predict(gbm1, newdata = test.data)
+  
+  oob.mse.gbm[i] <- (p- test.data$Score)^2 %>% mean()
+  boost.rsq[i] <- 1-(sum((p- test.data$Score)^2)/sum((school$Score - mean(school$Score))^2))
+  
+  SSE = SSE + sum((p - test.data$Score)^2)
+  SumE = SumE + sum(p - test.data$Score)
+}
+
+sqrt(mean(oob.mse.gbm))
+rsq = 1- SSE/(sum((school$Score - mean(school$Score))^2))
+```
+
+
+```{r}
+# library(BART) #we'll use gbart or wbart functions. (I'm pretty sure gbart just uses wbart when you put in a continuous outcome)
+# library(magrittr)
+# 
+# n.trees <- seq(20, 300, length.out = 10)
+# oob.mse <- NA
+# bart.rsq <- NA
+# SSE = 0
+# #120 trees i think is my best
+# for(i in 1:5){
+#   
+#   train <- school[-splits[[i]],]
+#   test <- school[splits[[i]],]
+#   bart = gbart(x.train = train[,-1], y.train = train$Score, x.test = test[,-1], ntree = 400, ndpost=1000, nskip = 300, sparse = TRUE)
+#   oob.mse[i] <- (bart$yhat.test.mean - test$Score)^2 %>% mean()
+#   bart.rsq[i] <- 1-(sum((bart$yhat.train.mean - train$Score)^2)/sum((train$Score - mean(train$Score))^2))
+# 
+#     SSE = SSE + sum((bart$yhat.test.mean - test.data$Score)^2)
+# 
+# }
+# 
+# # bart = gbart(x.train = train[,-1], y.train = train$Score, x.test = test[,-1], ntree = 600, ndpost=4000, nskip = 300, sparse = TRUE)
+# 
+# 
+# sqrt(mean(oob.mse))
+# rsq = 1- SSE/(sum((school$Score - mean(school$Score))^2))
+# bart.rsq
+# rsq
+```
+
+
+
+
+
+
+
+
+
+
+
+# MAX Models #
+## Models Used
+
+```{r Test/Train}
+set.seed(426)
+split <- (nrow(data) * .2) %>% round(0)
+split.sample <- sample(c(1:nrow(data)), split, replace = FALSE)
+
+train_labels <- data[-split.sample,]$Score
+train_data <- data[-split.sample,][,-1]
+test_labels <- data[split.sample,]$Score
+test_data <- data[split.sample,][,-1]
+```
+
+```{r}
+train_df <- train_data %>% 
+  as_tibble(.name_repair = "minimal") %>% 
+  mutate(label = train_labels)
+
+test_df <- test_data %>% 
+  as_tibble(.name_repair = "minimal") %>% 
+  mutate(label = test_labels)
+```
+
+```{r}
+spec <- feature_spec(train_df, label ~ . ) %>% 
+  step_numeric_column(all_numeric(), normalizer_fn = scaler_standard()) %>% 
+  fit()
+
+spec
+```
+
+```{r}
+input <- layer_input_from_dataset(train_df %>% select(-label))
+
+output <- input %>% 
+  layer_dense_features(dense_features(spec)) %>% 
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 1) 
+
+model <- keras_model(input, output)
+
+summary(model)
+```
+
+```{r}
+model %>% 
+  compile(
+    loss = "mse",
+    optimizer = optimizer_rmsprop(),
+    metrics = list("mse")
+  )
+
+build_model <- function() {
+  input <- layer_input_from_dataset(train_df %>% select(-label))
+  
+  output <- input %>% 
+    layer_dense_features(dense_features(spec)) %>% 
+    layer_dense(units = 10, activation = "relu") %>%
+    layer_dense(units = 5, activation = "relu") %>%
+    layer_dense(units = 2, activation = "relu") %>%
+    layer_dense(units = 1) 
+  
+  model <- keras_model(input, output)
+  
+  model %>% 
+    compile(
+      loss = "mse",
+      optimizer = optimizer_rmsprop(),
+      metrics = list("mse")
+    )
+  
+  model
+}
+```
+
+```{r}
+print_dot_callback <- callback_lambda(
+  on_epoch_end = function(epoch, logs) {
+    if (epoch %% 80 == 0) cat("\n")
+    cat(".")
+  }
+)    
+
+model <- build_model()
+
+history <- model %>% fit(
+  x = train_df %>% select(-label),
+  y = train_df$label,
+  epochs = 500,
+  validation_split = 0.1,
+  verbose = 0,
+  callbacks = list(print_dot_callback)
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+early_stop <- callback_early_stopping(monitor = "val_loss", patience = 20)
+
+model <- build_model()
+
+history <- model %>% fit(
+  x = train_df %>% select(-label),
+  y = train_df$label,
+  epochs = 500,
+  validation_split = 0.2,
+  verbose = 0,
+  callbacks = list(early_stop)
+)
+
+plot(history)
+```
+
+```{r}
+test_predictions <- model %>% predict(test_df %>% select(-label))
+preds <- test_predictions[ , 1]
+```
+
+```{r}
+sqrt(mean((preds-test_df$label)^2))
+```
+
+

@@ -1,0 +1,361 @@
+---
+title: "Credit Card Fraud Analysis"
+author:
+- Nate Hawkins
+- Matthew Morgan
+output:
+  pdf_document:
+    latex_engine: xelatex
+abstract: This analysis attempts to use modeling to predict fraudulent activity in credit card accounts. Very few transactions are fraudulent, but they cost Americans billions of dollars every year. Information on 300,000 transactions was used to model whether or not an transaction was fraudulent. After comparing many models, a random forest was determined to be the best at correctly classifying transactions. The random forest model correctly classified the status of over 99% of transactions, and correctly classified fraudulent transactions as being fraudulent 81% of the time.
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+
+library(caret)
+library(crosstable)
+library(dplyr)
+library(ggplot2)
+library(kableExtra)
+library(patchwork)
+library(pROC)
+library(purrr)
+library(tidyverse)
+```
+
+```{r}
+ccfraud <- read.csv("~/Documents/Stat 536/Unit 6 - Binary Classification ML/CCFraud.csv")
+
+# Removing the X column (Time)
+ccfraud <- ccfraud[,-1]
+
+# Removing duplicated rows
+ccfraud <- ccfraud[!duplicated(ccfraud),]
+
+ccfraud$Fraud <- ifelse(ccfraud$Class == 0, "No", "Yes") %>% as.factor()
+```
+
+```{r}
+set.seed(536)
+
+inTrain <- createDataPartition(y = ccfraud$Class, p = .8, list = FALSE)
+training <- ccfraud[inTrain,]
+test <- ccfraud[-inTrain,]
+```
+
+# Problem Statement & Understanding
+
+Credit card fraud is a major problem in the United States. Experts estimate that fraudulent transactions cost consumers 22 billion dollars every year. It is, therefore, very important to know which transactions are fraudulent and which ones are not. Machine learning can help solve this problem. The easiest solution would be to flag every single transactions as fraudulent, and investigate further. Although this solution is not practical. Machine learning can help find a model that will accurately flag fraudulent activity without flagging too many valid transactions as fraudulent. In this analysis, a data set containing information about 300,000 credit card transactions that have either been marked as fraudulent or not was used. Due to the proprietary nature of the data, the specifics of the transactions have been left ambiguous outside of the amount. This data set was used to make a prediction model. This study aims to understand how accurately fraudulent transactions can be identified. That is to say, if a transaction is fraudulent, how well can it be identified as such. Additionally, information from five different transactions will be analyzed for their validity to see if any of them are fraudulent.
+
+*Table 1* shows the breakdown of fraudulent and valid transactions in the data set. Notice that there are much more valid transactions than fraudulent transactions.
+
+```{r}
+crosstable(ccfraud, Fraud, percent_digits = 1) %>% 
+  as_flextable(keep_id = FALSE)
+```
+
+The unbalanced nature of the data will make the modeling tricky, as a model that predicts all valid transactions would have 99.8% accuracy. While this seems good, the whole point of the analysis is to correctly classify fraudulent transactions and so it is highly important that any model is able to detect and identify the fraudulent transactions. Therefore, it will also be important to choose at which point an observation will be marked as fraudulent. The response variable is binary in nature, making this a classification problem and classification modeling techniques will be pursued as a result. Due to the fact that the names of the variables are left ambiguous, it would be fruitless to attempt to understand the relationships between variables. There is also the possibility of many hidden interactions between variables in the data. Due to these limitations, a logistic regression model will likely not be the best model for this project.
+
+# Model Specification
+
+```{r, warning = FALSE}
+set.seed(536)
+
+log_under <- train(
+  Fraud ~ .,
+  data = training %>% select(-Class),
+  method = "glm",
+  family = "binomial",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE, 
+    sampling = "down"
+  )
+)
+
+log_under_acc <- c(round(log_under$results["Accuracy"], 3), round(log_under$results["AccuracySD"], 3))
+```
+
+```{r}
+set.seed(536)
+
+nnet_under <- train(
+  Fraud ~ .,
+  data = training %>% select(-Class),
+  method = "nnet",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE, 
+    sampling = "down"
+  ),
+  tuneGrid = expand.grid(
+    size = 1,
+    decay = 0
+  ),
+  trace = FALSE
+)
+
+nnet_under_acc <- c(round(nnet_under$results["Accuracy"], 3), round(nnet_under$results["AccuracySD"], 3))
+```
+
+```{r}
+set.seed(536)
+
+rf_under <- train(
+  Fraud ~ .,
+  data = training %>% select(-Class),
+  method = "ranger",
+  trControl = trainControl(
+    method = "cv", 
+    number = 10, 
+    classProbs = TRUE, 
+    sampling = "down"
+  ),
+  tuneGrid = expand.grid(
+    mtry = 2,
+    splitrule = "extratrees",
+    min.node.size = 1
+  ),
+  importance = "impurity",
+  num.trees = 100
+)
+
+rf_under_acc <- c(round(rf_under$results["Accuracy"], 3), round(rf_under$results["AccuracySD"], 3))
+
+```
+
+Initially, multiple models were considered for this analysis:
+
+-   Logistic Regression
+-   Neural Network
+-   Random Forest
+
+A logistic regression model was considered because it is the standard model for classification-based analysis such as this one and it is a good baseline model for comparison. The strength of the logistic regression model is its interpretability as it can quantify how variables affect the model probability estimates. Although, given that this analysis has mostly encoded variables, model interpretability is all but nullified. Additionally, the logistic regression model has explicit assumptions of linearity in the log-odds and independence that need to be checked.
+
+A neural network was considered because it is a powerful predictive model. A has no assumptions as it learns from the data given to it and therefore learns the relationships between that data. As a result of this learning, a neural network can model non-linear and more complex relationships on unseen data. One drawback to be aware of with a neural network is that it can easily overfit to the data given to it. Specifically for this analysis, overfitting would mean that the model understands the fraudulent transactions in the data set really well but does a poor job at detecting fraudulent transactions that it has not yet seen.
+
+A random forest model was considered because it is another powerful predictor model. It can also model non-linear relationships as it randomly selects a specified number of variables to make each tree. A random forest model also has no assumptions. Additionally, outliers are less of an issue for a random forest model. Although, a random forest model also has the drawback of overfitting.
+
+# Model Selection, Justification & Performance Evaluation
+
+```{r}
+acc_df <- rbind(log_under_acc, nnet_under_acc, rf_under_acc)
+```
+
+```{r}
+colnames(acc_df) <- c("Accuracy", "$\\sigma_\\text{Accuracy}$")
+row.names(acc_df) <- c("Logistic Regression", "Neural Network", "Random Forest")
+
+kable(
+  acc_df, 
+  format = "markdown", 
+  caption = "In-Sample Model Fit"
+)
+```
+
+*Table 2* looks at in-sample model fit for each of the candidate models. All the models were fit using a 10-fold cross validation procedure as the data set was large. Using this procedure allows the models to be checked for possible overfitting.
+
+Also, each of the models were fit using undersampling to address the imbalanced classes in the data set. Undersampling randomly "deletes" events in the majority class to end up with the same number of events as the minority class and a balanced sample. Specifically, there were `r nrow(training[training$Class == 1,])` fraudulent transactions in the 75% training split of the data set. As a result, `r nrow(training) - nrow(training[training$Class == 1,])` non-fraudulent transactions were "deleted" and the sample size was reduced from `r nrow(training)` to `r 2*nrow(training[training$Class == 1,])`. The hope was that with a balanced sample size, the models would better be able to identify the fraudulent transactions.
+
+Given the in-sample fit of each of the candidate models, the random forest model fit the data the best and will be used to identify and detect fraudulent transactions. 
+
+```{r}
+# Calculate a predicted probability for each point in our dataset
+rf_pred_probs <- predict(rf_under, newdata = test, type = "prob")[, "Yes"]
+
+# Creating a sequence that contains a lot of potential thresholds between 0 and 1
+thresh <- seq(from = 0, to = 1, length = 100)
+# Evaluating how well each threshold in thresh does in terms of a misclassification rate 
+misclass <- rep(NA, length = length(thresh)) #Empty vector to hold misclassification rates 
+sens <- rep(NA, length = length(thresh)) 
+ppv <- rep(NA, length = length(thresh)) 
+
+for (i in 1:length(thresh)) {
+  #If probability greater than threshold then 1 else 0
+  classification <- ifelse(rf_pred_probs > thresh[i], 1, 0)
+  # calculate the pct where my classification not eq truth
+  misclass[i] <- mean(classification != test$Class)
+  #misclass[i] <- mean(my.classification == 0 & Diabetes$diabetes == 1)
+  sens[i] <- sensitivity(data = as.factor(as.numeric(rf_pred_probs > thresh[i])), reference = as.factor(test$Class), positive = "1")
+  ppv[i] <- posPredValue(data = as.factor(as.numeric(rf_pred_probs > thresh[i])), reference = as.factor(test$Class), positive = "1")
+}
+
+#Find threshold which minimizes miclassification
+misclass_thresh <- thresh[which.min(misclass)]
+sensppv_thresh <- thresh[which.min(abs(sens - ppv))]
+
+thresh_df <- data.frame(thresh, misclass, sens, ppv)
+
+thresh_df <- thresh_df %>%
+  gather(key = "variable", value = "value", -thresh)
+
+roc <- roc(test$Class, rf_pred_probs, quiet = TRUE)
+```
+
+The breakdown of a classification-based random forest model is as follows:
+
+For $b = 1, \dots, B$
+
+-   Take a bootstrapped (with replacement) sample of size $n$
+
+-   At each split, randomly consider $m < P$ variables
+
+-   Build a tree $\tau_b$
+
+To predict for a point $x_0$
+
+-   For $b = 1, \dots, B$ pass $x_0$ down the $b^{th}$ tree to get bootstrapped probability prediction $\hat{y}^b(x_0)$
+
+-   Average predictions to get $$
+    \hat{y}(x_0) = \frac{1}{B}\sum_{b=1}^{B} \hat{y}^b(x_0)
+    $$
+
+Where
+
+-   $B$ \| `num.trees` (*100*) - total umber of trees to be built by the model
+
+-   `replacement` (*TRUE*) - parameter indicating whether bootstrap sampling is to be done with or without replacement
+
+-   $n$ \| `sample.fraction` (*1*) - size/proportion of the bootstrapped sample used to build each tree
+
+-   $m$ \| `mtry` (*2*) - the number of explanatory variables to randomly consider splitting at in a node
+
+-   $P$ (*29*) - the total number of explanatory variables in the data set
+
+-   $x_0$ - a point from the test data set which represents a single transaction
+
+-   $\hat{y}^b(x_0)$ - the bootstrapped probability prediction of $x_0$ being fraudulnt for the $b^{th}$ tree
+
+-   $\hat{y}(x_0)$ - the average bootstrapped probability prediction of $x_0$ being fraudulent
+
+-   `splitrule` (*extratrees*) - parameter that chooses the variable(s) that result in the best splits at each node by choosing cut-points fully at random
+
+-   `min.node.size` (*1*) - parameter that defines the minimum number of points from the training set required in a node to be considered for splitting.
+
+The random forest model has no assumptions that need to be justified. Also, the model was given all possible explanatory variables with the intuition that the model will inherently perform variable selection by using certain variables more than others.
+
+```{r}
+thresh_plot <- ggplot(data = thresh_df, aes(x = thresh, y = value)) + 
+  geom_line(aes(color = variable)) +
+  geom_hline(yintercept = min(misclass), lty = 2) + 
+  scale_color_manual(
+    name = "Metrics",
+    values = c("#E61744", "#1FB3D1", "#006073"),
+    labels = c("Misclassification\nRate", "PPV", "Sensitivity")
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(.4, .5)) +
+  labs(
+    title = "Random Forest Model",
+    subtitle = "Threshold Optimization",
+    x = "Threshold",
+    y = "",
+    caption = "Figure 1"
+  )
+```
+
+```{r}
+roc_plot <- ggroc(roc, colour = '#10A170', size = 2) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color = "darkgrey", linetype = "dashed") +
+  ggtitle(paste0('ROC Curve ', '(AUC = ', round(auc(roc), 4), ')')) +
+  theme_minimal() +
+  labs(
+    subtitle = "Classification across all thresholds?",
+    x = "Specificity",
+    y = "Sensitivity",
+    caption = "Figure 2"
+  )
+```
+
+```{r, warning = FALSE, fig.height = 4, fig.width = 8, fig.align = 'center'}
+thresh_plot + roc_plot
+```
+
+Since the outputs from the random forest model are predicted probabilities, a threshold must be selected to classify each of the transactions as fraudulent or non-fraudulent according to their predicted probabilities. Essentially, if the predicted probability is greater than the threshold, the transaction will be classified as fraudulent.
+
+*Figure 1* shows the misclassification rate, sensitivity, and positive predictive value (PPV) across multiple thresholds. The threshold chosen for this analysis was 0.8 as it provided the best balance between sensitivity and positive predictive value.
+
+*Figure 2* shows the ROC curve for the random forest model. With an ROC of `r round(auc(roc), 4)`, the model is classifying quite well across all thresholds.
+
+# Results
+
+First, the ability of the random forest model to correctly classifying fraudulent transactions will be examined. *Table 3* shows how well the model predicted out of sample. A perfect model would have 0's on the off-diagonals. 
+
+```{r, results = "asis"}
+conf_mat <- confusionMatrix(
+  data = as.factor(as.numeric(rf_pred_probs > .8)),
+  reference = as.factor(test$Class),
+  positive = "1"
+)
+ 
+kable(
+  conf_mat$table, 
+  format = "markdown", 
+  caption = "Confusion Matrix"
+)
+```
+
+-   *Sensitivity* - `r round(conf_mat$byClass["Sensitivity"], 4)` This means that
+    on average, `r round(conf_mat$byClass["Sensitivity"]*100, 2)`% of fraudulent transactions were predicted to be fraudulent
+-   *Specificity* - `r round(conf_mat$byClass["Specificity"], 4)` This means that
+    on average, `r round(conf_mat$byClass["Specificity"]*100, 2)`% of valid transactions were predicted to be valid
+-   *Positive Predictive Value* - `r round(conf_mat$byClass["Pos Pred Value"], 4)`
+    This means on average, `r round(conf_mat$byClass["Pos Pred Value"]*100, 2)`%
+    of transactions predicted to be fraudulent were fraudulent
+-   *Negative Predictive Value* - `r round(conf_mat$byClass["Neg Pred Value"], 4)`
+    This means that on average, `r round(conf_mat$byClass["Neg Pred Value"]*100, 2)`% of transactions predicted to be valid were valid
+
+```{r}
+# Get 10 most important variables
+ImpMeasure <- data.frame(varImp(rf_under)$importance)
+ImpMeasure$Vars <- row.names(ImpMeasure)
+rownames(ImpMeasure) <- NULL
+```
+
+```{r, fig.height = 3.5}
+ggplot(data = ImpMeasure[order(-ImpMeasure$Overall), ][1:10, ], aes(reorder(Vars, Overall), Overall)) +
+  geom_col(fill = "#0062B8", col = "black") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Random Forest Variable Importance",
+    subtitle = "10 Most Important Variables",
+    caption = "Figure 3",
+    x = "Variable",
+    y = "Importance"
+  )
+```
+
+*Figure 3* shows which variables are thought by the model to be the most important in determining fraudulent credit card activity. Although these variables have no interpretability, the owners of the data set may find this more insightful. This variable importance plot was included to show that there are certainly some variables that are more important than others that the model has weighted more heavily.
+
+Finally, five different transactions previously unseen by the model were predicted to be either fraudulent or valid. *Table 4* shows each transaction and it's probability of being fraudulent. Only transaction 3 has a probability of being fraudulent greater than 0.8, so it was flagged as such.
+
+```{r, results='asis'}
+fraud_detect <- read.csv("~/Documents/Stat 536/Unit 6 - Binary Classification ML/IsFraudulent.csv")
+
+rf_fraud_probs <- predict(rf_under, newdata = fraud_detect, type = "prob")[, "Yes"]
+
+df_fraud = data.frame("Transaction Number" = c(1:5), "Fraud Probability" = c(rf_fraud_probs), "Fraudulent?" = c("No", "No", "Yes", "No", "No"))
+kable(
+  col.names = c("Transaction Number", "Fraud Probability", "Fraudulent?"),
+  df_fraud, 
+  format = "markdown", 
+  caption = "New Transactions", 
+  align = c(rep('c', times = 3))
+)
+```
+
+# Conclusion
+
+In this analysis, multiple models were built and analyzed on their ability to predict the validity of a credit card transaction. After comparing these models, it was determined that a random forest model was best. The random forest was able to predict, with 99.9% accuracy whether or not a transaction was fraudulent. As a result of the cost of not flagging a fraudulent transaction being higher than incorrectly flagging a valid transaction, special attention was paid to ensuring that as many fraudulent transactions were flagged as possible. This resulted in a model with an out-of-sample sensitivity of `r round(conf_mat$byClass["Sensitivity"], 3)`. This means that given that a transaction was fraudulent, the model correctly predicted so `r round(conf_mat$byClass["Sensitivity"]*100, 1)`% of the time. Furthermore, this model incorrectly flagged a valid transaction as being fraudulent less than 1% of the time. 
+
+One shortcoming of this model is non-interpretability. Even if the variables were non-ambiguous, the quantitative relationship of the variables would still be unknown. The model has no way of telling whether certain variables increased or decreased the probability of a transaction being fraudulent. If the variables were non-ambiguous, perhaps a logistic regression model would have been used due to the interpretability of that model. In future studies, it is suggested that the classification of fraudulent transactions be limited to only the transactions that would actually cost the company money. Perhaps the fraudulent transactions that were of a minimal amount could be classified as "valid" as this could possibly increase the predictive power of the model without losing the company money.
+
+\newpage
+
+## Teamwork
+
+-   Matt - Model Specification, Selection, Justification, and Performance Evaluation
+-   Nate - Abstract, Problem Statement and Understanding, Results, and Conclusion

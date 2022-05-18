@@ -1,0 +1,402 @@
+---
+title: "Tulip Analysis"
+author: "BB-8"
+date: "4/28/2022"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+  bookdown::pdf_document2: 
+                toc: false
+  abstract: In this analysis we attempt to understand different tulip species are affected by various environmental factors. Tulips are very important to the economy in Netherlands and climate change threatens to disrupt the production of these flowers. Between 2013 and 2017 a study was conducted in order to better understand tulip germination (blooming). The resulting dataset indcludes amount of time being chilled, the year, the species of tulip, and a binary variable (germinated) indicating whether or not that tulip bloomed. We find that a logistic regression model fits these data well and is able to answer our primary research questions. We conclude that each tulip species has a different reaction to chilling time, that each species has an ideal chilling time, and that decreasing the chilling time (due to shorter winters) is likely to negatively affect the probability of germination for most tulip species.
+---
+```{r, include = FALSE}
+library(tidyverse)
+library(e1071)
+library(bestglm)
+library(beepr)
+library(corrplot)
+library(pROC)
+library(crosstable)
+library(car)
+library(ggthemes)
+germ <- read.csv("Germination.csv")
+head(germ)
+```
+
+```{r include = FALSE}
+germ$Germinated <- as.factor(germ$Germinated)
+germ$Germinated <- ifelse(germ$Germinated == "N", 0, 1)
+
+germ$Population <- as.factor(germ$Population)
+germ$ChillingTime <- as.factor(germ$ChillingTime)
+
+```
+
+
+
+# Introduction and Exploratory Data Analysis
+
+Tulips are a vital part of the economy in the Netherlands. The western region of the Netherlands (Holland) is known for its beautiful tulips that are exported out of the country and visited by hundreds of thousands of tourists each year. Climate change, however, threatens the growth of these crucial flowers. Temperature changes, as well as potential floods could alter the tulip production. In response to this problem, researches performed experiments in recent years to find ideal growing conditions for different species (populations) of tulips. In this experiment, researchers planted 210 bulbs for 12 different species (2510 total) of tulips. 30 of each species were randomly assigned to one of seven different chilling times between 0 and 12 weeks. Therefore each bulb spent between 0 and 12 weeks being chilled in a refrigerator before being planted in a green house. This chilling is an attempt to mimic the effect of a bulb being planted in the fall and enduring a winter before having a chance to bloom. After sufficient time, the scientists then recorded whether or not each bulb germinated (bloomed).
+
+We are interested in the following research questions:
+1) What is the effect of chilling time for different species of tulips? Is it the same across species? Which species are the same or different?
+2) Is there an ideal chilling time for each species? If so, is it the same for all species?
+3) Given that winters are expected to decrease from 10 weeks to 9 weeks in the coming years, what effect will this have on the germination for each species? Is it the same for all species?
+
+To begin to understand the problem and questions we will do some exploratory data analysis. First we investigate the germination rate of each species of tulip. In the following table, we see that species 1 has the highest germination rate (83%). Interestingly, species 12 did not have a single germination (0%).
+
+```{r echo = FALSE}
+library(crosstable)
+crosstable(germ, c(Population), by=Germinated, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+```
+
+Next we investiage the effect of chilling time on the germination rate. From the following graphic we see that no chilling time is detrimental to the tulips, only a 7% germination rate. However, a chilling time of 10 weeks results in a 71% germination rate. Because 12 weeks of chilling time results in less germination than 10 weeks, we will consider the possibility that there is not a strictly linear effect between chilling time and germination. This is a potential issue with the data that we must account for. Failure to account for this non-linearity will likely cause us to think that more chilling time is always better when that may not be the case. 
+
+
+```{r echo = FALSE, warning= FALSE}
+germ %>% group_by(ChillingTime) %>% mutate(percent_germinated = mean(Germinated)) %>% dplyr::distinct(percent_germinated) %>% 
+  ggplot(mapping = aes(x = ChillingTime, y = percent_germinated)) + 
+  geom_col(fill = "darkblue", width = 0.67) + 
+  labs(y = "Germination Rate", title = "Effect of Chilling Time on Germination Rate") + 
+  ylim(c(0,1)) + 
+  geom_text(aes(label = round(percent_germinated, 2)), vjust = -0.25) + 
+  theme_minimal() 
+```
+
+In this analysis standard regression will not be appropriate. This is because our variable of interest, germination, is a binary variable and can only take on two values. In standard linear regression we assume that the response variable can be any value, which would cause our estimates of the covariates to be wrong and also have incorrect standard errors. To deal with this, we will use logistic regression. Logistic regression assumes an underlying binomial distribution as opposed to the normal distribution from standard linear regression. 
+
+# Proposed Models and Methods
+
+We will consider both a logit logistic regression model and a random forest in this analysis. This gives us both a traditional statistical model as well as a machine learning model. Both models will be appropriate for the binary response variable, germination. We will evaluate the performance of both of these models and decide which one will better suit the goals of the study. 
+
+The random forest model is among the most interpretable of the machine learning models. It models the data based on decision trees. Random forests excel at modeling data that have a non-linear relationship between a covariate and response variable as well as modeling interactions. Random forests, however, will not give us an estimate for each coefficient. It can only tell us which variables and cutoffs were most important. The random forest model has no assumptions to check.
+
+The strength of the logit regression model is interpretability of the effects for the covariates. It will be straightforward to put these effect estimates into terms that are easily understood. The logistic regression model usually does well at in and out of sample fit. Potential downsides are not being able to model interactions well, as well as not handling non-monotonicity observed in the chilling time. To deal with this, we will include an interaction term between chilling time and population. We will also include a dummy variable for chilling times greater than 10 weeks. This will allow the logistic regression model to pick up on the dip in germination rates after 10 weeks observed in the data.
+
+The logistic regression model has two assumptions that must be met. First we must assume that our data are independent. This has to do with the method of obtaining the data. We also assume monotonicity in the independent variables. That is to say that there will either be an increase or decrease in the response variable as you increase the independent variable. Again, this assumption may be violated by the possible non-monotonicity in the chilling time. We will be careful in checking this assumption. If a variable increases and then decreases, this violates the monotonicity assumption. We will check these assumptions after selecting the model.
+
+
+
+# Model Selection and Performance
+
+/15pts Model Selection, Justification, & Performance Evaluation (Learning Outcome #2)
+•Does the report evaluate how well the proposed models fit the data (i.e. in-sample)?
+•Does the report describe how well the model predicts (i.e. out-of-sample/cross-validated)?
+•Was selected model written out correctly and its variables/Greek letters clearly defined?
+•Are the assumptions of the model clearly stated and justified (e.g. via exploratory analysis)?
+•Does the report justify why variables were included and/or excluded?
+
+In comparing these two models, we will first look at how well the model fit the data, or in-sample fit. To do so, we split the data into a training and a testing set. The training set contains 80% of the original data and we fit the model on that. We then see how accurate we were for that 80% of the data. We will use cross-validated classification rate, area under curve (AUC), sensitivity, and specificity to compare the models. Classification rate is the percent correct, sensitivity measures how often we correctly identified that a bulb would germinate, specificity measures how often we correctly identified that a bulb would not germinate, and AUC measures how well the model captures both sensitivity and specificity.
+
+From the table below we see that the logistic regression model outperforms the random forest across all categories. The most important of which is probably classification. The logistic regression model correctly identifies whether or not a bulb will germinate 81% of the time in the training set compared to 79% of the time for the random forest. 
+
+```{r, echo = FALSE}
+table <- data.frame("Model" = c("Logit", "Random Forest"), "Classification" = c(0.81,0.79), "AUC" = c(0.90, 0.87), "Sensitivity" = c(0.802, 0.79), "Specificity" = c(0.820,0.79))
+knitr::kable(table, caption = "In-sample model fits")
+```
+
+The 20% left out is called the testing set. After training the models on the training data, we predict using the testing data that the model hasn't seen before. The figure below shows that logistic regression again outperforms the random forest, this time by about 3%.
+
+```{r echo = FALSE}
+table <- data.frame("Model" = c("Logit", "Random Forest"), "Classification" = c(0.80,0.77))
+knitr::kable(table, caption = "Out-of-sample model fits")
+```
+
+
+We will continue with the logistic regression model because of its performance in and out of sample as well as its interpretability. This is our model:
+
+$$p_{i} = exp(x'_{i}\beta_{i})/(1+exp(x'_{i}\beta_{i}))$$
+
+$$Y_{i} \sim Bernouli(p_{i})$$
+In this model $p$ represents the probability of a given bulb germinating. $x$ is the data matrix that has a column for each variable of interest. That is each population, the population-chilling time intercation, chilling time, and a dummy variable indicating whether the chilling time was greater than 10 weeks. $p$ is determined by a sigmoid function of our x matrix multiplied by the $\beta_i$'s which are the coefficients for each x variable. For example $\beta_2$ is the estimated effect that the second factor (being population (species) 2) has on the odds of germination. $Y_i$ is a vector containing a 0 or 1 of whether or not a bulb germinated. We assume that this happens with probability $p_i$.
+
+Note that there are many $\beta_i$'s. This is because we have an effect for each population level (12), the chilling level, all the interactions between those, and the greater than 10 weeks variable. We decided to use both variables and their interaction in order to properly answer our research goals. The amount of time before being harvested variable was left out because each species was harvested all at the same time. Therefore time and population would have the exact same effect.
+
+Through anova, we show that the interaction between chilling time and population is necessary. Running a type III anova to compare the model with and without the interaction gives a p-value of almost 0. This indicates that the inclusion of the interaction term is necessary. Through a similar process, we justified incluging the dummy variable of greater than 10 weeks of chilling.
+
+Our model has two different assumptions. The first assumption is that the data are independent. This could possibly be violated if there were researcher bias. But given the experimental design we assume that the data are independent. We also assume monotonicity in our variables. Our final model was monotone in the quantitative variable, chilling time, except at 12 weeks. With the inclusion of the greater than ten weeks variable we acheive monotonicity. All other variables are factors and therefore have just a single effect so the monotonicity assumption is met 
+
+# Results and Analysis
+
+
+We will now analyze the model and answer our research questions. The following table shows the model coefficients for the variables on an interpretable scale.
+
+```{r echo = FALSE, warning=FALSE}
+germ$ChillingTime <- as.numeric(germ$ChillingTime)
+
+germ$LongChillingTime <- ifelse(germ$ChillingTime > 6, 1, 0)
+
+logistic_glm_int <- glm(Germinated ~ Population*(ChillingTime) + LongChillingTime  ,
+    data =germ, family = binomial(link = "logit"))
+
+
+table <- cbind(100*(exp(logistic_glm_int$coefficients)-1),(100*(exp(confint(logistic_glm_int))-1)))
+table <- round(table[,1:3],2)
+knitr::kable(table, col.names = c("Estimate", "Lower CI", "Upper CI"), caption = "Coefficients on percent-change scale")
+
+
+```
+
+We can interpret the different populations in context to population 1. Being from Population 2 rather than population 1 decreases the probability of germinating by 77%. With 95% confidence the true difference between population 1 and population 2 is between -40% and -91%. Because this confidence interval doesn't include 0, we can say that this is a statistically significant effect. The LongChillingTime variable was included to account for the dropoff in germination rate after 10 weeks as shown above. This variable is a 1 for 12 weeks and 0 other wise. Our model estimates that being over 12 weeks decreases probability of germinating by 85%, and between 90% and 78% with 95% confidence.
+
+Some populations were more sensitive to chilling times than others. For example, the interaction between population 3 and chilling time was positive. This indicates that population 3 tulips benefited more from chilling time than other tulips species. This is not true, however for all species. The interaction between population 5 and chilling time was statistically significantly negative. This means that as you chill population 5 longer, its probability of germination goes down relative to a similarly chilled population 1 tulip. This supports the anova test mentioned earlier that justified the inclusion of the interaction between population and chilling time. This definitely answers our first research question that the effect of chilling time differs across all species.
+
+Overall, an extra week of chilling increased probability of germination by 83%. Though, again, this decreased after week 10, as evidenced by the negative effect (-85%) of the LongChillingTime variable.
+
+We answer research question number two with a graphic. Below we see the probability of germination for each population (y-axis) for increasing amounts of time chilled (x-axis). This gives the ideal chilling time for each population. Notice that the probability of germination increases each week for most of the populations. For many, the increase from an extra week chilled outweighs the decrease attributed to being over 10 weeks. Using this graphic, we would recommend chilling almost all species longer, except for species 5 and 8. Those likely have an ideal chilling time of about 9-10 weeks.
+
+```{r echo = FALSE}
+pred_grid <- expand.grid(ChillingTime = c(0:12), Population = c(1:12))
+pred_grid$Population <- as.factor(pred_grid$Population)
+pred_grid$LongChillingTime <- ifelse(pred_grid$ChillingTime > 10, 1, 0)
+
+Probability <- predict.glm(logistic_glm_int, pred_grid, type = "response")
+
+ggplot(mapping = aes(x = pred_grid$ChillingTime, y = pred_grid$Population, fill = Probability) ) + 
+  geom_raster() + labs(y = "Population", x = "Chilling Time", title = "Ideal chilling time for each population") + theme_minimal()
+```
+
+The theory that winters will to decrease from 10 weeks to 9 weeks will probably decrease the probability of germination for most populations. The negative effect seen by chilling for over 10 weeks, however, will be less likely to be seen now with shorter winters. 
+
+
+To summarize, the logistic regression model with an interaction term for the chilling time and populations as well as a dummy variable for long chilling times was the best model for this analysis and our research questions. This model did well both in and out of sample and was able to answer our questions of interest. We conclude that there is an effect for amount of time being chilled and this effect varies for each population. The probability of germinating increases for most species as chill time increases, though this does not hold for populations five and eight. Because of this interaction, each species will have its own ideal chilling time. For most species, the longer the chilling time the better. Finally, if winters do decrease from 10 weeks to 9, it will likely have a negative effect on the probability of germination for those species that like longer chilling times. It will probably not effect the other species as much.
+
+One shortcoming of the model has to do with the potential decrease in germination probability after 10 weeks. Though we were able to solve this problem with a dummy variable and meet model assumptions, there are other routes that could possible solve this problem more elegantly. Although other methods solving this problem may hinder the interpretability of the model. Another potential drawback is being too simple and not predicting as well as some more complex machine learning models.
+
+In future studies researchers could perhaps fit a polynomial spline to the chill time effect to attempt to account for the non-linearity. It would also be interesting to see if there is an effect between chilling time and time until germination, though new data would have to be collected.
+
+
+
+
+
+
+```{r include = FALSE}
+# AUC for logsitic regression
+germ$ChillingTime <- as.numeric(germ$ChillingTime)
+germ$LongChillingTime <- ifelse(germ$ChillingTime > 6, 1, 0)
+
+samp = sample(1:nrow(germ), round(nrow(germ))*0.8)
+train = germ[samp,]
+test = germ[-samp,]
+mylogit <- glm(Germinated ~ Population*ChillingTime + LongChillingTime ,
+    data =train, family = binomial(link = "logit"))#summary(mylogit)
+AIC(mylogit)
+BIC(mylogit)
+# Check in sample fit
+y.hat = ifelse(mylogit$fitted.values < 0.5,0,1)
+table(y.hat)
+sensitivity.logit =  mean(y.hat[germ$Germinated == 1] == 1)
+specificity.logit = mean(y.hat[germ$Germinated == 0] == 0)
+predictions <- predict.glm(mylogit, type = "response")
+
+library(pROC)
+auc(test$Germinated, predictions)
+mean(y.hat == train$Germinated)
+
+```
+
+```{r include = FALSE}
+# Anova tests for subset selction
+mylogit <- glm(Germinated ~ Population*ChillingTime + LongChillingTime ,
+    data =germ, family = binomial(link = "logit"))
+
+mylogit_nested <- glm(Germinated ~ Population*ChillingTime ,
+    data =germ, family = binomial(link = "logit"))
+
+anova(mylogit, mylogit_nested, test = "Chisq")
+
+
+mylogit <- glm(Germinated ~ Population*ChillingTime + LongChillingTime ,
+    data =germ, family = binomial(link = "logit"))
+
+mylogit_nested <- glm(Germinated ~ Population + ChillingTime + LongChillingTime,
+    data =germ, family = binomial(link = "logit"))
+
+anova(mylogit, mylogit_nested, test = "Chisq")
+```
+
+
+
+
+```{r include = FALSE}
+# Threshold and rates for logistic regression model
+Threshold = seq(0,1,by=0.01)
+false.negative.rate <- false.positive.rate <- true.positive.rate <- error.rate <- (0*Threshold-99)
+germ$ChillingTime <- as.numeric(germ$ChillingTime)
+germ$LongChillingTime <- ifelse(germ$ChillingTime > 6, 1, 0)
+samp = sample(1:nrow(germ), round(nrow(germ))*0.8)
+train = germ[samp,]
+test = germ[-samp,]
+model <- glm(Germinated ~ Population*(ChillingTime) + LongChillingTime  ,
+    data =train, family = binomial(link = "logit"))
+y = test$Germinated
+for(i in 1:length(Threshold)){
+  y.hat = ifelse(predict.glm(model, test) < Threshold[i],0,1)
+  error.rate[i] = mean(y!=y.hat)
+  TP = sum(y==1 & y.hat==1)
+  TN = sum(y==0 & y.hat==0)
+  FP = sum(y==0 & y.hat==1)
+  FN = sum(y==1 & y.hat==0)
+  false.negative.rate[i] = FN/(FN+TP) # 1-sensitivity
+  false.positive.rate[i] = FP/(FP+TN) # 1-specificity
+}
+
+## Errors plot from slide
+plot(Threshold,error.rate,ylim=c(0,1),ylab='Error Rate',type='l',lwd=2)
+lines(Threshold,false.negative.rate,col=4,lty=2,lwd=2)
+lines(Threshold,false.positive.rate,col=2,lty=3,lwd=2)
+abline(v = 0.502)
+
+## ROC
+plot(false.positive.rate,1 - false.negative.rate
+     ,xlab = "False Positive Rate (1-Specificity)",ylab = "True Positive Rate (Sensitivity)"
+     ,col=4,type='l',lwd=2
+)
+abline(0,1,lty=3)
+
+best.threshold = which.min(abs(false.negative.rate - false.positive.rate))
+Threshold[best.threshold]
+
+
+1-error.rate[best.threshold]
+1-false.negative.rate[best.threshold]
+1-false.positive.rate[best.threshold]
+
+```
+
+```{r include = FALSE}
+# Threshold and rates for random forest
+library(ranger)
+Threshold = seq(0,1,by=0.01)
+false.negative.rate <- false.positive.rate <- true.positive.rate <- error.rate <- (0*Threshold-99)
+model <- ranger(Germinated ~ Population + ChillingTime ,
+    data =train)
+
+preds <- model$predictions
+y = test$Germinated
+for(i in 1:length(Threshold)){
+  y.hat = ifelse(preds < Threshold[i],0,1)
+  error.rate[i] = mean(y!=y.hat)
+  TP = sum(y==1 & y.hat==1)
+  TN = sum(y==0 & y.hat==0)
+  FP = sum(y==0 & y.hat==1)
+  FN = sum(y==1 & y.hat==0)
+  false.negative.rate[i] = FN/(FN+TP) # 1-sensitivity
+  false.positive.rate[i] = FP/(FP+TN) # 1-specificity
+}
+
+## Errors plot from slide
+plot(Threshold,error.rate,ylim=c(0,1),ylab='Error Rate',type='l',lwd=2)
+lines(Threshold,false.negative.rate,col=4,lty=2,lwd=2)
+lines(Threshold,false.positive.rate,col=2,lty=3,lwd=2)
+abline(v = 0.502)
+
+## ROC
+plot(false.positive.rate,1 - false.negative.rate
+     ,xlab = "False Positive Rate (1-Specificity)",ylab = "True Positive Rate (Sensitivity)"
+     ,col=4,type='l',lwd=2
+)
+abline(0,1,lty=3)
+
+best.threshold = which.min(abs(false.negative.rate - false.positive.rate))
+Threshold[best.threshold]
+
+
+1-error.rate[best.threshold]
+1-false.negative.rate[best.threshold]
+1-false.positive.rate[best.threshold]
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- ```{r include = FALSE} -->
+
+<!-- germ$Germinated <- ifelse(germ$Germinated == "N", 0, 1) -->
+<!-- mylogit <- glm(Germinated ~ Population*ChillingTime  , -->
+<!--     data =germ, family = binomial(link = "logit"))#summary(mylogit) -->
+<!-- summary(mylogit) -->
+<!-- AIC(mylogit) -->
+<!-- BIC(mylogit) -->
+<!-- # Check in sample fit -->
+<!-- y.hat = ifelse(mylogit$fitted.values < 0.097,0,1) -->
+<!-- table(y.hat) -->
+<!-- sensitivity.logit =  mean(y.hat[germ$Germinated == 1] == 1) -->
+<!-- specificity.logit = mean(y.hat[germ$Germinated == 0] == 0) -->
+<!-- predictions <- predict.glm(mylogit, type = "response") -->
+
+<!-- library(pROC) -->
+<!-- auc(germ$Germinated, predictions) -->
+<!-- mean(y.hat == germ$Germinated) -->
+
+
+<!-- myprobit <- glm(Germinated ~ Population*ChillingTime  , -->
+<!--     data =germ, family = binomial(link = "probit"))#summary(mylogit) -->
+<!-- summary(myprobit) -->
+<!-- AIC(myprobit) -->
+<!-- BIC(myprobit) -->
+<!-- # Check in sample fit -->
+<!-- y.hat = ifelse(myprobit$fitted.values < 0.097,0,1) -->
+<!-- table(y.hat) -->
+<!-- sensitivity.probit =  mean(y.hat[germ$Germinated == 1] == 1) -->
+<!-- specificity.probit = mean(y.hat[germ$Germinated == 0] == 0) -->
+<!-- auc(germ$Germinated, predictions) -->
+<!-- mean(y.hat == germ$Germinated) -->
+<!-- ``` -->
+
+
+
+<!-- ```{r include = FALSE} -->
+<!-- germ <- read.csv("Germination.csv") -->
+<!-- germ$Population <- as.factor(germ$Population) -->
+
+<!-- library(caret) -->
+<!-- samp = sample(1:nrow(germ), round(nrow(germ))*0.8) -->
+<!-- train = germ[samp,] -->
+<!-- rf <- train( -->
+<!--   as.factor(Germinated) ~ ChillingTime + Population, -->
+<!--   data = train, -->
+<!--   method = "ranger", -->
+<!--   metric = "Accuracy", -->
+<!--   trControl = trainControl( -->
+<!--     method = "cv",  -->
+<!--     number = 10,  -->
+<!--     classProbs = TRUE -->
+<!--   ), -->
+<!--   tuneGrid = expand.grid( -->
+<!--     mtry = 2, -->
+<!--     splitrule = "extratrees", -->
+<!--     min.node.size = 1 -->
+<!--   ), -->
+<!--   importance = "impurity", -->
+<!--   num.trees = 50 -->
+<!-- ) -->
+
+<!-- rf$results -->
+<!-- rf_results <- c(round(rf$results["Accuracy"], 3), round(rf$results["AccuracySD"], 3)) -->
+<!-- rf_results -->
+<!-- ``` -->
+

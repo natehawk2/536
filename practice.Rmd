@@ -1,0 +1,63 @@
+---
+title: "Practice"
+author: "Nathan Hawkins"
+date: "12/15/2021"
+output: html_document
+---
+
+
+```{r}
+library(tidyverse)
+library(e1071)
+library(bestglm)
+library(beepr)
+library(corrplot)
+library(pROC)
+library(crosstable)
+library(car)
+library(ggthemes)
+ore <- read.csv("oregon.csv")
+head(ore)
+names(ore)
+
+set.seed(536)
+```
+
+```{r}
+ore <- read.csv("oregon.csv")
+ore$income <- log(ore$income + 1)
+
+head(ore)
+samp = sample(1:nrow(ore), round(nrow(ore)*0.8))
+train = ore[samp,]
+test = ore[-samp,]
+```
+
+```{r}
+logistic1 <- glm(enrolled ~ ., data = ore %>% filter(invited == 1 & income < 1) %>% select(-invited, -income), family = binomial(link = "logit"))
+summary(logistic1)
+
+
+
+confints = confint(logistic1)
+confints[,1]
+
+coef.df <- data.frame("Effect" = round((exp(logistic1$coef)-1)*100, 1),
+                      "Lower_95" = round((exp(confints[,1])-1)*100, 1),
+                      "Upper_95" = round((exp(confints[,2])-1)*100, 1),
+                      "Pvalue" = round(summary(logistic1)$coefficients[,4], 3))
+coef.df
+knitr::kable(coef.df)
+
+knitr::kable(coef.df[-1,] %>% filter(Pvalue < 0.05))
+
+crosstable(data = data, cols = "enrolled", by = "female")
+```
+```{r}
+hist(logistic1$fitted.values, breaks = 30)
+hist(logistic1$fitted.values[ore$invited ==1 & ore$income < 1] - ore$enrolled[ore$invited ==1 & ore$income < 1], breaks = 30)
+table(ore[ore$invited ==1 & ore$income < 1,"age"])
+crosstable(data = ore[ore$invited ==1 & ore$income < 1,], (age), by = enrolled)
+hist(x = ore$age[ore$enrolled == 1])
+```
+

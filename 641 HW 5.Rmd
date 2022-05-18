@@ -1,0 +1,288 @@
+---
+title: "Stat 641 HW 5"
+author: "Nathan Hawkins"
+date: "9/28/2021"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+pi = 3.1415
+g3b = function(x){
+  if(x < atan(2)){
+    (1/(2*(cos(x))))/pi
+  }
+  else if(x > atan(2) & x < pi/2){
+    (1/cos(pi/2-x))/pi
+  }
+  else if(x > pi/2 & x < pi - atan(2)){
+    (1/cos(x-pi/2))/pi
+  }
+  else{
+    (1/(2*cos(pi-x)))/pi
+  }
+}
+
+a = 0
+b = 3.1415
+m = 50000
+library(ggplot2)
+
+
+set.seed(1)
+x_random = runif(m, a, b)
+
+h_eval <- NA
+for(i in 1:m){
+  h_eval[i] = (b - a) * g3b(x_random[i])
+}
+ggplot(mapping = aes(x = x_random, y = h_eval)) + 
+  geom_point()
+partial_int = cumsum(h_eval) / 1:m
+
+ci_lo = partial_int - qnorm(.975) * sapply(1:m,function(x){
+  sd(h_eval[1:x])/sqrt(x)
+})
+ci_hi = partial_int + qnorm(.975) * sapply(1:m,function(x){
+  sd(h_eval[1:x])/sqrt(x)
+})
+
+
+par(mar = c(5,5,1,1))
+plot(10:m,partial_int[-(1:9)],type = "l",
+     xlab = "M",
+     ylab = expression(bar(I[m]) ),lwd = 2)
+lines(10:m,ci_lo[-(1:9)],col = "blue",lty = 2,lwd = 2)
+lines(10:m,ci_hi[-(1:9)],col = "blue",lty = 2,lwd =2)
+
+abline(h = 0.765,lty = 3,col = "red",lwd = 2)
+
+partial_int[m]
+
+sqrt(var(h_eval)/m)
+```
+
+
+# Question 4a
+# Coverges to 0.24
+# Variance is 1.87 * 10^-5
+
+```{r}
+
+f4a = function(x){
+  ifelse(x >= 0 & x <=1, 5/(atan(5)*(1+25*x^2)), 0)
+}
+
+a = 0
+b = 1
+m = 10000
+
+g4a = function(x){
+  x
+}
+
+h4a =  function(x){
+  dunif(x,0,1)
+}
+
+
+set.seed(1)
+x_random = runif(m, a, b)
+
+
+
+h_eval <- NA
+for(i in 1:length(x_random)){
+  h_eval[i] = f4a(x_random[i]) * g4a(x_random[i])/h4a(x_random[i])
+}
+
+ggplot(mapping = aes(x = x_random, y = h_eval)) + 
+  geom_point()
+
+partial_int = cumsum(h_eval) / 1:length(x_random)
+
+ci_lo = partial_int - qnorm(.975) * sapply(1:length(x_random),function(x){
+  sd(h_eval[1:x])/sqrt(x)
+})
+ci_hi = partial_int + qnorm(.975) * sapply(1:length(x_random),function(x){
+  sd(h_eval[1:x])/sqrt(x)
+})
+
+
+par(mar = c(5,5,1,1))
+plot(10:length(x_random),partial_int[-(1:9)],type = "l",
+     xlab = "M",
+     ylab = expression(bar(I[m]) ),lwd = 2)
+lines(10:length(x_random),ci_lo[-(1:9)],col = "blue",lty = 2,lwd = 2)
+lines(10:length(x_random),ci_hi[-(1:9)],col = "blue",lty = 2,lwd =2)
+
+abline(h = 2.406,lty = 3,col = "red",lwd = 2)
+
+partial_int[length(x_random)]
+
+(sd(h_eval)/sqrt(length(x_random)))^2
+var(h_eval)/m
+
+```
+
+
+# Question 4b:
+# Converges to 0.24
+# Variance is 0.00032
+```{r}
+
+
+f4b = function(x){
+  ifelse(x >= 0 & x <=1, 5/(atan(5)*(1+25*x^2)), 0)
+}
+h4b <- function(x){
+  dcauchy(x, 0, 1/5)
+}
+g4b = function(x){
+  x
+}
+
+a = 0
+b = 1
+m = 10000
+
+
+set.seed(1)
+x_random = rcauchy(m, 0, 0.2)
+
+
+h_eval <- NA
+for(i in 1:length(x_random)){
+  h_eval[i] = f4b(x_random[i]) * g4b(x_random[i])/ h4b(x_random[i])
+}
+
+ggplot(mapping = aes(x = x_random, y = h_eval)) + 
+  geom_point()
+
+partial_int = cumsum(h_eval) / 1:length(x_random)
+
+ci_lo = partial_int - qnorm(.975) * sapply(1:length(x_random),function(x){
+  sd(h_eval[1:x])/sqrt(x)
+})
+ci_hi = partial_int + qnorm(.975) * sapply(1:length(x_random),function(x){
+  sd(h_eval[1:x])/sqrt(x)
+})
+
+
+par(mar = c(5,5,1,1))
+plot(10:length(x_random),partial_int[-(1:9)],type = "l",
+     xlab = "M",
+     ylab = expression(bar(I[m]) ),lwd = 2)
+lines(10:length(x_random),ci_lo[-(1:9)],col = "blue",lty = 2,lwd = 2)
+lines(10:length(x_random),ci_hi[-(1:9)],col = "blue",lty = 2,lwd =2)
+
+abline(h = .2406,lty = 3,col = "red",lwd = 2)
+
+partial_int[length(x_random)]
+
+
+(sd(h_eval)/sqrt(length(x_random)))^2
+var(h_eval)/length(x_random)
+
+```
+
+
+# 4c
+# Converges to 0.238
+# 0.027
+
+```{r}
+m = 10e3
+f4 = function(x){
+  5/(atan(5)*(1+25*x^2))
+}
+
+h4 = function(x){
+  dbeta(x, 2, 1)
+}
+
+g4 = function(x){
+  x
+}
+
+set.seed(1)
+x_random = rbeta(m,2,1)
+h_eval4 = g4(x_random)*f4(x_random)/h4(x_random)
+partial_int4 = cumsum(h_eval4) / 1:m
+
+ci_lo4 = partial_int4 - qnorm(.975) * sapply(1:m,function(x){
+  sd(h_eval4[1:x])/sqrt(x)
+})
+ci_hi4 = partial_int4 + qnorm(.975) * sapply(1:m,function(x){
+  sd(h_eval4[1:x])/sqrt(x)
+})
+
+
+par(mar = c(5,5,1,1))
+plot(10:m,partial_int4[-(1:9)],type = "l",
+     xlab = "M",
+     ylab = expression(bar(I[m]) ),lwd = 2)
+lines(10:m,ci_lo4[-(1:9)],col = "blue",lty = 2,lwd = 2)
+lines(10:m,ci_hi4[-(1:9)],col = "blue",lty = 2,lwd =2)
+
+abline(h = 2,lty = 3,col = "red",lwd = 2)
+
+partial_int4[length(x_random)]
+
+mean((h_eval4-0.238)^2)
+     
+  
+
+```
+
+
+# 4d
+# Converges to 0.235
+# variance is 2.35*10^-5
+
+```{r}
+m = 10e3
+f4 = function(x){
+  5/(atan(5)*(1+25*x^2))
+}
+
+h4 = function(x){
+  dbeta(x, 1, 2)
+}
+
+g4 = function(x){
+  x
+}
+
+set.seed(1)
+x_random = rbeta(m,1,2)
+h_eval4 = g4(x_random)*f4(x_random)/h4(x_random)
+partial_int4 = cumsum(h_eval4) / 1:m
+
+ci_lo4 = partial_int4 - qnorm(.975) * sapply(1:m,function(x){
+  sd(h_eval4[1:x])/sqrt(x)
+})
+ci_hi4 = partial_int4 + qnorm(.975) * sapply(1:m,function(x){
+  sd(h_eval4[1:x])/sqrt(x)
+})
+
+
+par(mar = c(5,5,1,1))
+plot(10:m,partial_int4[-(1:9)],type = "l",
+     xlab = "M",
+     ylab = expression(bar(I[m]) ),lwd = 2)
+lines(10:m,ci_lo4[-(1:9)],col = "blue",lty = 2,lwd = 2)
+lines(10:m,ci_hi4[-(1:9)],col = "blue",lty = 2,lwd =2)
+
+abline(h = 2,lty = 3,col = "red",lwd = 2)
+
+partial_int4[length(x_random)]
+
+mean((h_eval4-0.238)^2)
+     
+mean(h_eval4)/m
+
+```
+# 4e: Part a has the smallest variance because the uniform distribution that you draw from has heavy tails that more appropriately represent the weight of the pdf.

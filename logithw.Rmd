@@ -1,0 +1,356 @@
+---
+title: "Targeted Marketing"
+author: "Nathan Hawkins"
+date: "11/5/2021"
+output:
+  pdf_document: default
+  html_document: default
+  
+  bookdown::pdf_document2: 
+                toc: false
+abstract: In this analysis we attempt to understand how marketing campaigns can increase the probability of a customer signing up for a credit card. There are many potential ways to get a customer to sign up, we seek to find what the optimal campaigns and target audiences are. Speicifically we want to know whether social media or personal contact methods are more effective and if repeated contacting is a good strategy. In order to understand these relationships, we fit a logistic regression model. The logistic regression model is good for these data and does well at both prediction and inference in this setting.
+---
+
+```{r include = FALSE}
+library(ggplot2)
+library(dplyr)
+library(crosstable)
+
+mark <- read.csv("TargetedMarketing.csv", header = TRUE, sep = ";")
+
+mark$job = as.factor(mark$job)
+mark$marital = as.factor(mark$marital)
+mark$education = as.factor(mark$education)
+mark$default = as.factor(mark$default)
+mark$housing = as.factor(mark$housing)
+mark$loan = as.factor(mark$loan)
+mark$contact = as.factor(mark$contact)
+mark$month = as.factor(mark$month)
+mark$day_of_week = as.factor(mark$day_of_week)
+mark$poutcome = as.factor(mark$poutcome)
+mark$y = ifelse(mark$y == "no", 0, 1)
+mark$y = as.factor(mark$y)
+mark$pdays <- ifelse(mark$pdays == "999", 0,
+                     ifelse(mark$pdays < 5, 1, 
+                          ifelse(mark$pdays > 4 & mark$pdays < 10, 2, 
+                                 ifelse(mark$pdays > 9 & mark$pdays < 15, 3, 
+                                        ifelse(mark$pdays > 14 & mark$pdays < 20, 4, 
+                                               ifelse(mark$pdays > 19, 5, 6))))))
+
+```
+
+# Introduction
+
+
+Targeted marketing campaigns are essential for companies that are trying to optimize their outreach efforts. To reach a target audience, marketing directors should have a good understanding of which groups could be profitable. In this analysis, we will attempt to understand which characteristics make members of a bank more likely to open an account with a credit card. At our disposal we have a data set with demographic information for 41,000 bank members and whether or not they opened a new account. In addition to understanding which variables are most conducive to opening a new account, we are also interested in understanding whether social media or personal contact are more effective in marketing, and if repeated contacting increases the likelihood of a person opening an account. First we will explore the data. Below we show cross tables of a view variables of interest:
+
+
+```{r echo = FALSE}
+par(mfrow= c(2,1))
+
+mark1 <- mark
+mark1$previous <- as.factor(mark$previous)
+
+crosstable(mark, c(contact), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark1, c(previous), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+```
+
+Initially it appears that members that are contacted over the phone rather than over social media are less likely to open a new account. Also, members that have been contacted more appear more likely to open an account. Because we are dealing with a binary response variable (the member either opens an account or doesn't) we will need to use classification techniques instead of regression. To do this, we will use logistic regression. A regular linear model would not be able to classify this response variable. Machine learning models will do a poor job at understanding the relationships between variables and response. Because our primary interest in this analysis is inference instead of prediction, we will use classic logistic regression.
+
+# Models
+
+We will consider both a logit and probit logistic regression model in this analysis. Both models will be appropriate for the binary response variable in this analysis. These models will likely have similar performance but different interpretations. We will evaluate the performance of both of these models and decide which one will be better. These models will both give us estimates for the effects of the variables on responses and so we will be able to answer our questions of interest.
+
+Both of these models have inherent assumptions that must be met for the analysis to be valid. First we must assume that our data are independent. This has to do with the method of obtaining the data. We also assume monotonicity in the independent variables. That is to say that there will either be an increase or decrease in the response variable as you increase the independent variable. If a variable increases and then decreases, this violates the monotonicity assumption. We will check these assumptions after selecting the model.
+
+## Model Summary
+
+We run a 10-fold cross validation to compare model performance and show the results below.
+```{r echo = FALSE}
+table <- data.frame("Model" = c("Logit", "Probit"), "Classification" = c(1-0.31,1-0.30), "AUC" = c(0.76, 0.76), "Sensitivity" = c(0.67, 0.66), "Specificity" = c(0.69,0.70))
+knitr::kable(table, caption = "Out-of-sample model fits"
+             #col.names = c("Model", "RMSE", "R Squared")
+             )
+```
+
+The cross validation shows that these models are very similar in predictive performance. The sensitivity or true positive rate of the logit model is a little bit better. This means that it is a little bit better at correctly predicting a member sign up. The specificity or true negative rate of the probit model is slightly better. This means it outperforms the logit model at correctly predicting a member not signing up. 
+
+We will now look at the in-sample fit:
+```{r}
+table <- data.frame("Model" = c("Logit", "Probit"), "Classification" = c(1-0.31,1-0.31), "AUC" = c(0.76, 0.76), "Sensitivity" = c(0.67, 0.68), "Specificity" = c(0.69,0.69))
+knitr::kable(table, caption = "In-sample model fits")
+```
+The in-sample fits are nearly identical between the two models. So, from both a out-of-sample and in-sample fit view, these two models are almost identical. So we will continue with a logit model because it is more interpretable and we will better understand the independent variables than with the probit model.
+
+## Selected Model and Assumptions
+The following is our proposed model:
+$$Model: p_{i} = exp(x'_{i}\beta_{i})/(1+exp(x'_{i}\beta_{i}))$$
+and
+
+$$Y_{i} \sim Bernouli(p_{i})$$
+In this model $p$ represents the probability of a given client taking out a new account. It is determined by a sigmoid function of our x vector multiplied by our $\beta_i$'s which are our coefficients for each x variable. For example $\beta_2$ is the estimated effect that the second factor (having a blue-collar job) has on the odds of opening a new account. $Y_i$ is a vector containing a 0 or 1 of whether or not the customer opened a new account. We assume that this happens with probability $p_i$.
+
+We performed variable selection using a bestglm function in R which minimizes the AIC value. It tests possible subsets of our variables in order to pick the best model. From this algorithm we decided on using 6 of the given variables. We used job type, whether they have credit in default, contact method, month, number of contacts during campaign, and the number of days that have past since the client was contacted from a previous campaign which we split into 5 bins.
+
+Our model has two different assumptions. The first assumption is that the data is independent. This could possibly be violated if a client was listed multiple times in the dataset at different times. However, from the information given about the dataset this doesn't seem to be true and we can assume independence from the method of collection. We also assume monotonicity in our variables. Our final model only had one variable that wasn't simply split into categories. To check to make sure that this variable, "campaign", is monotone we can look at a graph with a smooth curve fit to it below. We see that the probability of accounts being opened just decreases as campaign increases. This means it is monotone and our assumption is justified.
+```{r echo = FALSE}
+mylogit <- glm(y ~ job + default + contact + month + campaign + as.factor(pdays) , data = mark, family = binomial(link = "logit"))
+
+mark.graph = mark
+mark.graph$y = as.numeric(mark.graph$y)-1
+ggplot(data = mark.graph, mapping = aes(x=campaign, y = y)) + geom_point() + geom_smooth(se = FALSE) +xlab("Number of Contacts Performed During Campaign")+ylab("Whether an account was opened") + theme_minimal() + labs(title = "Checking monotonicity")
+```
+
+## Results
+```{r echo = FALSE, warning = FALSE}
+table <- cbind(mylogit$coefficients[c(22, 16, 21, 18, 25, 6, 9, 15, 26:30)],confint(mylogit)[c(22, 16, 21, 18, 25, 6, 9, 15, 26:30),])
+table <- round(table[,1:3],2)
+knitr::kable(table, col.names = c("Estimate", "Lower CI", "Upper CI"), caption = "Log-odds coefficients of significant variables")
+```
+
+The above table shows some of the more impactful estimated coefficients from our model. The coefficients above are estimates of how the log-odds of whether or not a client opens a new credit card changes based on a change in the variable. For example, if a person is contacted on Social Media rather than directly, we are 95% confident that the log-odds of whether they open a new credit card will go up between .94 and 1.04. Once we have obtained the log-odds we can then back transform it to get the probability of that client opening a new account. Below are shown the transformations. 
+
+```{r echo = FALSE, warning = FALSE}
+table <- cbind(100*(exp(mylogit$coefficients[c(22, 16, 21, 18, 25, 6, 9, 15, 26:30)])-1),(100*(exp(confint(mylogit)[c(22, 16, 21, 18, 25, 6, 9, 15, 26:30),])-1)))
+table <- round(table[,1:3],2)
+knitr::kable(table, col.names = c("Estimate", "Lower CI", "Upper CI"), caption = "Coefficients on percent-change scale")
+```
+
+These coefficients are more intrepretable: Contacting someone in the month of October decreases the percent chance that the customer will open a new account by 22.56% compared to contacting in the month of March. The other coefficients can be interpretted similarly.
+
+From our model coefficients and associated uncertainty we can see what characteristics of customers are more likely to take out a new credit card. We see that customers that were contacted in previous marketing campaigns tended to be more likely to take out a new credit card. Specifically, those that had been contacted 20 days or more ago tended to be most likely to take out a new credit card.
+
+We also see that those contacted on social media as well as those with a job listed as a student or retired are more likely to take out a new credit card as well. Each of these variables had a positive coefficient with an associated z-value that was significant.
+
+We can also see that March tends to be the month that is best to contact customers as the coefficients of other months are negative.
+
+As stated earlier those contacted on social media do seem more likely to take out a new credit card. This would provide some evidence that social media is more effective in marketing. However, there could be other hidden factors that are affecting this.
+
+Repeated contacting does seem to increase the likelihood of a person taking out an account. Waiting 20 days or more from the previous campaign to make this contacts appears to be the best. However, contacting in the same campaign multiple times shows a decrease in the likelihood of a person taking out an account.
+
+From the coefficients we see that it is likely the best people to contact would most likely be those that are retired and those that are students. It would be best if they are contacted again they were contacted in a previous campaign. Using social media and contacting around the month of March are also positive indicators.
+
+
+## Conclusion
+Overall, we were able to meet the goals of the study as we now understand better which characteristics of a person make them more likely to take out a credit card. We were also able to determine that there is evidence that social media contact is more effective than in-person contact. We also determined that repeated contacting is effective, but not across the same marketing campaign. However, contacting clients from previous campaigns does lead to an increase in the likelihood that they will take out a new credit card.
+
+Our model didn't have too many shortcomings. Overall, it fit the data well and the predictions were pretty good. However, if the bank wished to predict what customers are going to take out a new credit card then our model may not be the strongest. Thus, if the bank wished to pursue further steps as far as prediction goes, different machine models could be tested and cross-validated to see how well they can predict. Another step that the bank might take to better understand how well their marketing does is to compare different marketing campaigns.
+
+```{r include = FALSE}
+library(ggplot2)
+library(dplyr)
+scatter.smooth(jitter(mark$previous,amount=.5),jitter(as.numeric(mark$y)-1,amount=.1),pch=19,cex=.5,xlab="Previous",ylab="Diabetes", main = "Diabetes vs. Age Density Graph")
+
+
+library(forcats)
+mark <- mark %>%
+  mutate(day_of_week = fct_relevel(day_of_week, 
+            "mon", "tue", "wed", 
+            "thu", "fri"))
+
+mark$month
+mark <- mark %>%
+  mutate(month = fct_relevel(month, 
+            "mar", 
+            "apr", "may", "jun",
+            "jul", "aug", "sep", 
+            "oct", "nov", "dec"))
+
+library(crosstable)
+library(dplyr)
+crosstable(mark, c(y), by=day_of_week, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(day_of_week, marital), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(job), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(marital), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(education), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(month), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(default), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(contact), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+crosstable(mark, c(loan), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+mark1 <- mark
+mark1$previous <- as.factor(mark$previous)
+crosstable(mark1, c(previous), by=y, percent_digits=0) %>% 
+  as_flextable(keep_id=FALSE)
+
+
+```
+
+
+
+```{r include = FALSE}
+mylogit <- glm(y ~ age + default + contact + month + campaign + as.factor(pdays), data = mark, family = binomial(link = "logit"))
+BIC(mylogit)
+```
+
+
+
+```{r include=FALSE}
+mylogit <- glm(y ~ job + default + contact + month + campaign + as.factor(pdays) , data = mark, family = binomial(link = "logit"))
+#summary(mylogit)
+summary(mylogit)
+AIC(mylogit)
+BIC(mylogit)
+# Check in sample fit
+y.hat = ifelse(mylogit$fitted.values < 0.097,0,1)
+table(y.hat)
+sensitivity.logit =  mean(y.hat[mark$y == 1] == 1)
+specificity.logit = mean(y.hat[mark$y == 0] == 0)
+predictions <- predict.glm(mylogit, type = "response")
+
+library(pROC)
+auc(mark$y, predictions)
+mean(y.hat == mark$y)
+
+
+mylogit <- glm(y ~ job + default + contact + month + campaign + as.factor(pdays) , data = mark, family = binomial(link = "probit"))
+#summary(mylogit)
+summary(mylogit)
+AIC(mylogit)
+BIC(mylogit)
+# Check in sample fit
+y.hat = ifelse(mylogit$fitted.values < 0.097,0,1)
+table(y.hat)
+sensitivity.probit =  mean(y.hat[mark$y == 1] == 1)
+specificity.probit = mean(y.hat[mark$y == 0] == 0)
+auc(mark$y, predictions)
+mean(y.hat == mark$y)
+
+```
+
+
+
+```{r include = FALSE}
+Threshold = seq(0,1,by=0.001)
+false.negative.rate <- false.positive.rate <- true.positive.rate <- error.rate <- (0*Threshold-99)
+model = mylogit
+y = mark$y
+hist(model$fitted.values)
+for(i in 1:length(Threshold)){
+  y.hat = ifelse(model$fitted.values < Threshold[i],0,1)
+  error.rate[i] = mean(y!=y.hat)
+  TP = sum(y==1 & y.hat==1)
+  TN = sum(y==0 & y.hat==0)
+  FP = sum(y==0 & y.hat==1)
+  FN = sum(y==1 & y.hat==0)
+  false.negative.rate[i] = FN/(FN+TP) # 1-sensitivity
+  false.positive.rate[i] = FP/(FP+TN) # 1-specificity
+}
+
+## Errors plot from slide
+plot(Threshold,error.rate,ylim=c(0,1),ylab='Error Rate',type='l',lwd=2)
+lines(Threshold,false.negative.rate,col=4,lty=2,lwd=2)
+lines(Threshold,false.positive.rate,col=2,lty=3,lwd=2)
+abline(v = 0.097)
+
+## ROC
+plot(false.positive.rate,1 - false.negative.rate
+     ,xlab = "False Positive Rate (1-Specificity)",ylab = "True Positive Rate (Sensitivity)"
+     ,col=4,type='l',lwd=2
+)
+abline(0,1,lty=3)
+
+best.threshold = which.min(abs(false.negative.rate - false.positive.rate))
+
+1-error.rate[best.threshold]
+false.negative.rate[best.threshold]
+false.positive.rate[best.threshold]
+
+```
+
+```{r include = FALSE}
+predictions <- predict.glm(mylogit, type = "response")
+
+library(pROC)
+auc(mark$y, predictions)
+```
+
+
+
+# Cross validate
+```{r}
+# best.threshold <- 0.097
+# K = 10
+# possibilities = 1:nrow(mark)
+# this.many = round(nrow(mark)/K)
+# 
+# splits <- list()
+# already.used <- NA
+# for(i in 2:K){
+#   samp <- sample(possibilities, this.many, replace = FALSE)
+#   splits[[i]] <- samp
+#   possibilities = possibilities[!(possibilities %in% splits[[i]]) ]
+# }
+# splits[[1]] = possibilities
+# 
+# error.rate = NA
+# auc.logit <- NA
+# sens.logit <- NA
+# spec.logit <- NA
+# 
+# for(i in 1:K){
+#   train.data <- mark[-splits[[i]],]
+#   test.data <- mark[splits[[i]],]
+#   mylogit <- glm(y ~ job + default + contact + month + campaign + as.factor(pdays), data = train.data, family = binomial(link = "logit"))
+#   predictions <- predict(mylogit, type = "response", newdata = test.data)
+#   preds = ifelse(predictions > best.threshold, 1, 0)
+# 
+#   error.rate[i] <- sum(preds != test.data$y)/nrow(test.data)
+#   auc.logit[i] <- auc(test.data$y, predictions)
+#   sens.logit[i] <- mean(preds[test.data$y == 1] == 1)
+#   spec.logit[i] <- mean(preds[test.data$y == 0] == 0)
+# }
+# 
+# mean(error.rate)
+# mean(auc.logit)
+# mean(sens.logit)
+# mean(spec.logit)
+# 
+# 
+# error.rate.prob = NA
+# auc.probit <- NA
+# sens.probit <- NA
+# spec.probit <- NA
+# 
+# 
+# for(i in 1:K){
+#   train.data <- mark[-splits[[i]],]
+#   test.data <- mark[splits[[i]],]
+#   mylogit <- glm(y ~ job + default + contact + month + campaign + as.factor(pdays), data = train.data, family = binomial(link = "probit"))
+#   predictions <- predict(mylogit, type = "response", newdata = test.data)
+#   preds = ifelse(predictions > best.threshold, 1, 0)
+# 
+#   error.rate.prob[i] <- sum(preds != test.data$y)/nrow(test.data)
+#   auc.probit[i] <- auc(test.data$y, predictions)
+#   sens.probit[i] <- mean(preds[test.data$y == 1] == 1)
+#   spec.probit[i] <- mean(preds[test.data$y == 0] == 0)
+# }
+# 
+# mean(error.rate.prob)
+# mean(auc.probit)
+# mean(sens.probit)
+# mean(spec.probit)
+
+```
+
+

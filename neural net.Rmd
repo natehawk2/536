@@ -1,0 +1,42 @@
+---
+title: "Practice"
+author: "Nathan Hawkins"
+date: "10/12/2021"
+output: html_document
+---
+
+```{r}
+install.packages("devtools")
+devtools::install_github("rstudio/keras")
+install_keras(tensorflow="nightly")
+
+install.packages("keras")
+install.packages("tensorflow")
+install_keras()
+library(keras)
+library(tensorflow)
+library(reticulate)
+
+install_tensorflow()
+
+reticulate::py_install(envname = "r-tensorflow", packages = "numpy")
+
+
+```
+
+
+```{r}
+library(tidyverse)
+model <- keras_model_sequential() %>%
+  layer_dense(units = 16, activation = "relu", input_shape = c(5000)) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+```
+
+
+```{r}
+model <- keras_model_sequential() %>%
+  layer_dense(units = 16, activation = "relu", input_shape = c(5000)) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")```
+
